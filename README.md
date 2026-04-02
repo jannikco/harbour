@@ -111,6 +111,8 @@ scheduled → running → done
 
 Failed and skipped runs can be retried from the dashboard — the run goes back to `pending` and the agent picks it up on next poll.
 
+`waiting` runs do not block the job from firing again on schedule. New runs continue normally while a run is waiting for human input.
+
 ## Projects
 
 Projects are an optional way to organize your work. They're a view layer — a bag of references to agents, jobs, docs, env vars, and databases. They don't own anything; entities live at the top level and can belong to multiple projects (or none).

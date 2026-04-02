@@ -259,7 +259,7 @@ export function getAgentNextRun(agentId: string) {
       WHERE j.agent_id = ? AND j.active = 1 AND j.one_off = 0
       AND j.next_run_at IS NOT NULL AND j.next_run_at <= ?
       AND NOT EXISTS (
-        SELECT 1 FROM runs WHERE job_id = j.id AND status IN ('scheduled', 'running', 'waiting', 'pending')
+        SELECT 1 FROM runs WHERE job_id = j.id AND status IN ('scheduled', 'running', 'pending')
       )
       ORDER BY j.next_run_at ASC LIMIT 1
     `).get(agentId, now) as any;

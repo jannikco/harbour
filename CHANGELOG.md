@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.4.1 — 2026-04-02
+
+### Fix
+- `waiting` runs no longer block a job from firing on its next scheduled interval — new runs are created normally while a run is waiting for human input
+
 ## v1.4.0 — 2026-04-02
 
 ### Admin API Keys
