@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withAuth, requireAgentOwnership } from "@/lib/auth";
-import { getRunById, updateRunStatus, addRunActivity } from "@/lib/db/queries";
+import {
+  getRunById,
+  updateRunStatus,
+  addRunActivity,
+  validateRunStatusTransition,
+} from "@/lib/db/queries";
 
 const VALID_STATUSES = ["running", "waiting", "pending", "done", "failed", "skipped", "killed"];
 
@@ -15,6 +20,11 @@ export const PUT = withAuth(async (req, auth, { params }) => {
   const body = await req.json();
   if (!body.status || !VALID_STATUSES.includes(body.status)) {
     return NextResponse.json({ error: `status must be one of: ${VALID_STATUSES.join(", ")}` }, { status: 400 });
+  }
+
+  const validationError = validateRunStatusTransition(id, body.status);
+  if (validationError) {
+    return NextResponse.json({ error: validationError }, { status: 409 });
   }
 
   const updated = updateRunStatus(id, body.status);

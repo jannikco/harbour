@@ -11,7 +11,7 @@ export const GET = withAuth(async (req) => {
 // Create an agentless workflow-only job
 export const POST = withUserAuth(async (req) => {
   const body = await req.json();
-  const { name, description, schedule, workflowCommand, docIds, envVarIds } = body;
+  const { name, description, schedule, workflowCommand, docIds, envVarIds, triggerKind, watchedStageId } = body;
   if (!name || !schedule || !workflowCommand) {
     return NextResponse.json({ error: "name, schedule, and workflowCommand are required" }, { status: 400 });
   }
@@ -26,6 +26,8 @@ export const POST = withUserAuth(async (req) => {
     workflowOnly: true,
     docIds,
     envVarIds,
+    triggerKind,
+    watchedStageId,
   });
   return NextResponse.json(job, { status: 201 });
 });

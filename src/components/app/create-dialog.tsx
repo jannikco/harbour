@@ -10,13 +10,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { SchedulePicker, parseSchedule, serializeSchedule } from "@/components/app/schedule-picker";
 import { ModelThinkingSelect, SELECT_CLASS } from "@/components/app/model-thinking-select";
-import { AlertCircle, Bot, Pin, FileText, KeyRound, Loader2, Paperclip, Plus, Terminal, X } from "lucide-react";
+import { AlertCircle, Bot, Calendar, KanbanSquare, Pin, FileText, KeyRound, Loader2, Paperclip, Plus, Terminal, X } from "lucide-react";
 import { useActiveProjectId } from "@/lib/hooks/use-project-filter";
 import { uploadFileToRun } from "@/lib/upload-client";
 
 type Agent = { id: string; name: string; type: string; cli: string | null; model: string | null; thinking: string | null; remote: number | null };
 type Doc = { id: string; title: string; pinned: number };
 type EnvVar = { id: string; name: string; pinned: number };
+type ProjectStage = { id: string; project_id: string; name: string };
+type Project = { id: string; name: string };
 
 // Sub-dialog for picking docs or env vars
 export function PickerDialog({
@@ -177,6 +179,30 @@ export function CreateDialog({
   const [workflowCommand, setWorkflowCommand] = useState("");
   const [agentEnabled, setAgentEnabled] = useState(true);
   const [workflowEnabled, setWorkflowEnabled] = useState(false);
+  const [triggerKind, setTriggerKind] = useState<"schedule" | "task_stage">("schedule");
+  const [taskProjectId, setTaskProjectId] = useState("");
+  const [watchedStageId, setWatchedStageId] = useState("");
+
+  const { data: allProjects = [] } = useQuery<Project[]>({
+    queryKey: ["projects"],
+    queryFn: async () => {
+      const res = await fetch("/api/projects");
+      if (!res.ok) return [];
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
+  const { data: stagesForProject = [] } = useQuery<ProjectStage[]>({
+    queryKey: ["stages", taskProjectId],
+    queryFn: async () => {
+      if (!taskProjectId) return [];
+      const res = await fetch(`/api/projects/${taskProjectId}/stages`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!taskProjectId,
+  });
 
   useEffect(() => {
     if (open) setTab(defaultTab);
@@ -227,6 +253,9 @@ export function CreateDialog({
     setWorkflowCommand("");
     setAgentEnabled(true);
     setWorkflowEnabled(false);
+    setTriggerKind("schedule");
+    setTaskProjectId("");
+    setWatchedStageId("");
     setLoaded(false);
   }
 
@@ -307,6 +336,10 @@ export function CreateDialog({
     e.preventDefault();
     const isWorkflowOnly = workflowEnabled && !agentEnabled;
     if (!name.trim() || (!isWorkflowOnly && !agentId)) return;
+    if (triggerKind === "task_stage" && (!taskProjectId || !watchedStageId)) {
+      alert("Pick a project and stage to watch.");
+      return;
+    }
 
     const url = isWorkflowOnly ? "/api/jobs" : `/api/agents/${agentId}/jobs`;
     const res = await fetch(url, {
@@ -323,20 +356,22 @@ export function CreateDialog({
         thinking: agentEnabled ? (thinking || undefined) : undefined,
         docIds: selectedDocIds.length > 0 ? selectedDocIds : undefined,
         envVarIds: selectedEnvVarIds.length > 0 ? selectedEnvVarIds : undefined,
+        triggerKind,
+        watchedStageId: triggerKind === "task_stage" ? watchedStageId : undefined,
       }),
     });
     if (!res.ok) { alert("Failed to create job"); return; }
 
-    // Auto-link the job to the active project
-    if (activeProjectId) {
-      const data = await res.json();
-      if (data.id) {
-        await fetch(`/api/projects/${activeProjectId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "link", type: "job", targetId: data.id }),
-        });
-      }
+    // Auto-link the job to the active project, or to the project owning the
+    // watched stage if no active project but trigger is task_stage.
+    const data = await res.json();
+    const targetProjectId = activeProjectId || (triggerKind === "task_stage" ? taskProjectId : null);
+    if (targetProjectId && data.id) {
+      await fetch(`/api/projects/${targetProjectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "link", type: "job", targetId: data.id }),
+      });
     }
 
     handleClose(false);
@@ -509,10 +544,74 @@ export function CreateDialog({
                   </div>
                 )}
 
-                <div className="space-y-2">
-                  <Label>Schedule</Label>
-                  <SchedulePicker schedule={schedule} onChange={setSchedule} />
-                </div>
+                {agentEnabled && (
+                  <div className="space-y-2">
+                    <Label>Trigger</Label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setTriggerKind("schedule")}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${triggerKind === "schedule" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}
+                      >
+                        <Calendar className="h-3.5 w-3.5" /> Schedule
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTriggerKind("task_stage")}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${triggerKind === "task_stage" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}
+                      >
+                        <KanbanSquare className="h-3.5 w-3.5" /> Task stage
+                      </button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {triggerKind === "schedule"
+                        ? "Job fires on a recurring schedule."
+                        : "Job fires whenever a task is in the watched stage. The agent must move the card before completing."}
+                    </p>
+                  </div>
+                )}
+
+                {triggerKind === "schedule" ? (
+                  <div className="space-y-2">
+                    <Label>Schedule</Label>
+                    <SchedulePicker schedule={schedule} onChange={setSchedule} />
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      <Label>Project</Label>
+                      <select
+                        value={taskProjectId}
+                        onChange={e => { setTaskProjectId(e.target.value); setWatchedStageId(""); }}
+                        className={SELECT_CLASS}
+                        required
+                      >
+                        <option value="">Select a project...</option>
+                        {allProjects.map(p => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Watched stage</Label>
+                      <select
+                        value={watchedStageId}
+                        onChange={e => setWatchedStageId(e.target.value)}
+                        className={SELECT_CLASS}
+                        disabled={!taskProjectId}
+                        required
+                      >
+                        <option value="">Select a stage...</option>
+                        {stagesForProject.map(s => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                      {taskProjectId && stagesForProject.length === 0 && (
+                        <p className="text-xs text-muted-foreground">This project has no stages.</p>
+                      )}
+                    </div>
+                  </>
+                )}
 
                 {workflowEnabled && (
                   <div className="space-y-2">

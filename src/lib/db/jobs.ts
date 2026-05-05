@@ -18,21 +18,29 @@ export function createJob(agentId: string | null, data: {
   docIds?: string[];
   envVarIds?: string[];
   active?: boolean;
+  triggerKind?: "schedule" | "task_stage";
+  watchedStageId?: string | null;
 }) {
   const db = getDb();
   const id = uuid();
-  const nextRunAt = data.active !== false ? getNextRunTime(data.schedule, undefined, getTimezone()) : null;
+  const triggerKind = data.triggerKind || "schedule";
+  // Task-triggered jobs don't use schedule-driven next_run_at; they fire whenever
+  // a task appears in the watched stage.
+  const nextRunAt = (triggerKind === "schedule" && data.active !== false)
+    ? getNextRunTime(data.schedule, undefined, getTimezone())
+    : null;
 
   const create = db.transaction(() => {
     db.prepare(`
-      INSERT INTO jobs (id, agent_id, name, description, instructions, schedule, workflow_command, workflow_only, model, thinking, active, next_run_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO jobs (id, agent_id, name, description, instructions, schedule, workflow_command, workflow_only, model, thinking, active, next_run_at, trigger_kind, watched_stage_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, agentId, data.name, data.description || null,
       data.instructions || null, data.schedule,
       data.workflowCommand || null, data.workflowOnly ? 1 : 0,
       data.model || null, data.thinking || null,
-      data.active !== false ? 1 : 0, nextRunAt
+      data.active !== false ? 1 : 0, nextRunAt,
+      triggerKind, data.watchedStageId || null
     );
 
     // Merge explicitly selected docs/env vars with pinned ones
@@ -138,6 +146,8 @@ export function updateJob(id: string, data: {
   envVarIds?: string[];
   active?: boolean;
   nextRunAt?: number;
+  triggerKind?: "schedule" | "task_stage";
+  watchedStageId?: string | null;
 }) {
   const db = getDb();
   const fields: string[] = [];
@@ -151,6 +161,18 @@ export function updateJob(id: string, data: {
   if (data.model !== undefined) { fields.push("model = ?"); values.push(data.model || null); }
   if (data.thinking !== undefined) { fields.push("thinking = ?"); values.push(data.thinking || null); }
   if (data.timeoutMinutes !== undefined) { fields.push("timeout_minutes = ?"); values.push(data.timeoutMinutes); }
+  if (data.triggerKind !== undefined) {
+    fields.push("trigger_kind = ?"); values.push(data.triggerKind);
+    // Switching to schedule clears the watched stage; switching to task_stage clears next_run_at.
+    if (data.triggerKind === "task_stage") {
+      fields.push("next_run_at = NULL");
+    } else if (data.triggerKind === "schedule" && data.watchedStageId === undefined) {
+      fields.push("watched_stage_id = NULL");
+    }
+  }
+  if (data.watchedStageId !== undefined) {
+    fields.push("watched_stage_id = ?"); values.push(data.watchedStageId || null);
+  }
 
   if (data.active !== undefined) {
     fields.push("active = ?"); values.push(data.active ? 1 : 0);

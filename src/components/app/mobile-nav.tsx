@@ -13,6 +13,7 @@ import {
   FileText,
   Database,
   KeyRound,
+  KanbanSquare,
   Users,
   Settings,
   MoreHorizontal,
@@ -21,7 +22,7 @@ import {
 
 export function MobileBottomNav() {
   const pathname = usePathname();
-  const { waitingCount } = useApp();
+  const { waitingCount, activeProjectId } = useApp();
   const [moreOpen, setMoreOpen] = useState(false);
   const router = useRouter();
 
@@ -33,6 +34,7 @@ export function MobileBottomNav() {
   ];
 
   const moreLinks = [
+    ...(activeProjectId ? [{ href: "/board", label: "Board", icon: KanbanSquare }] : []),
     { href: "/docs", label: "Docs", icon: FileText },
     { href: "/databases", label: "Databases", icon: Database },
     { href: "/env-vars", label: "Env Vars", icon: KeyRound },

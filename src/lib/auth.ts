@@ -95,6 +95,23 @@ export function requireAgentOwnership(auth: AuthContext, agentId: string | null)
   return null;
 }
 
+/**
+ * Agents may only mutate a task they currently have claimed via an active run.
+ * Users always pass through. Returns a 403 response or null. Caller passes a
+ * lookup function so this module avoids importing db code directly.
+ */
+export function requireTaskClaim(
+  auth: AuthContext,
+  taskId: string,
+  hasActiveClaim: (agentId: string, taskId: string) => boolean
+): NextResponse | null {
+  if (auth.type !== "agent") return null;
+  if (!hasActiveClaim(auth.agentId, taskId)) {
+    return NextResponse.json({ error: "Agent does not have an active claim on this task" }, { status: 403 });
+  }
+  return null;
+}
+
 export function getActorFromAuth(auth: AuthContext): { actorType: string; actorId: string } {
   if (auth.type === "user") {
     return { actorType: "user", actorId: auth.userId };

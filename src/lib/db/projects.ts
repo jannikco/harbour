@@ -1,4 +1,4 @@
-import { getDb } from "./schema";
+import { getDb, seedDefaultBoardSql } from "./schema";
 import { v4 as uuid } from "uuid";
 
 // --- Project CRUD ---
@@ -6,7 +6,10 @@ import { v4 as uuid } from "uuid";
 export function createProject(name: string) {
   const db = getDb();
   const id = uuid();
-  db.prepare(`INSERT INTO projects (id, name) VALUES (?, ?)`).run(id, name);
+  db.transaction(() => {
+    db.prepare(`INSERT INTO projects (id, name) VALUES (?, ?)`).run(id, name);
+    seedDefaultBoardSql(db, id);
+  })();
   return getProjectById(id);
 }
 

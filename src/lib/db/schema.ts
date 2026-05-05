@@ -1,9 +1,42 @@
 import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
+import { v4 as uuid } from "uuid";
 import { normalizeSchedule } from "../schedule";
 import { encrypt } from "../encryption";
 import { dbPath, harbourHome, ensureDir } from "../paths";
+
+/**
+ * Seed the default kanban board (To Do → Doing → Review → Done) for a project.
+ * Exported via stages.ts; called from initializeSchema for backfill and from
+ * createProject so every new project boots with a usable board.
+ */
+export function seedDefaultBoardSql(db: Database.Database, projectId: string) {
+  const stages = [
+    { name: "To Do", position: 0, terminal: 0 },
+    { name: "Doing", position: 1, terminal: 0 },
+    { name: "Review", position: 2, terminal: 0 },
+    { name: "Done", position: 3, terminal: 1 },
+  ];
+  const ids: Record<string, string> = {};
+  const insertStage = db.prepare(
+    `INSERT INTO project_stages (id, project_id, name, position, is_terminal) VALUES (?, ?, ?, ?, ?)`
+  );
+  for (const s of stages) {
+    const id = uuid();
+    ids[s.name] = id;
+    insertStage.run(id, projectId, s.name, s.position, s.terminal);
+  }
+  const insertTransition = db.prepare(
+    `INSERT OR IGNORE INTO stage_transitions (from_stage_id, to_stage_id) VALUES (?, ?)`
+  );
+  // Forward flow + kick-back paths
+  insertTransition.run(ids["To Do"], ids["Doing"]);
+  insertTransition.run(ids["Doing"], ids["Review"]);
+  insertTransition.run(ids["Doing"], ids["To Do"]);
+  insertTransition.run(ids["Review"], ids["Done"]);
+  insertTransition.run(ids["Review"], ids["To Do"]);
+}
 
 let _db: Database.Database | null = null;
 
@@ -321,6 +354,56 @@ export function initializeSchema(db: Database.Database) {
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
 
+    -- Project stages: kanban columns belonging to a project
+    CREATE TABLE IF NOT EXISTS project_stages (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      is_terminal INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      UNIQUE(project_id, name)
+    );
+
+    -- Stage transitions: directed edges of legal moves between stages
+    CREATE TABLE IF NOT EXISTS stage_transitions (
+      from_stage_id TEXT NOT NULL REFERENCES project_stages(id) ON DELETE CASCADE,
+      to_stage_id   TEXT NOT NULL REFERENCES project_stages(id) ON DELETE CASCADE,
+      PRIMARY KEY (from_stage_id, to_stage_id)
+    );
+
+    -- Tasks: kanban cards in a project
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      stage_id TEXT NOT NULL REFERENCES project_stages(id),
+      title TEXT NOT NULL,
+      description TEXT,
+      position INTEGER NOT NULL,
+      claimed_by_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+      archived_at INTEGER,
+      created_by_type TEXT CHECK(created_by_type IN ('user','agent')),
+      created_by_id TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+
+    -- Task activity: comments and stage-change log entries
+    CREATE TABLE IF NOT EXISTS task_activity (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('comment','stage_change','created','claimed','released')),
+      from_stage_id TEXT REFERENCES project_stages(id),
+      to_stage_id TEXT REFERENCES project_stages(id),
+      author_type TEXT NOT NULL CHECK(author_type IN ('user','agent','system')),
+      author_id TEXT,
+      author_name TEXT,
+      content TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+
     -- Indexes
     CREATE INDEX IF NOT EXISTS idx_attachment_processing_attachment ON attachment_processing(attachment_id);
     CREATE INDEX IF NOT EXISTS idx_attachment_processing_run ON attachment_processing(run_id);
@@ -342,6 +425,12 @@ export function initializeSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_captain_conversations_user ON captain_conversations(user_id);
     CREATE INDEX IF NOT EXISTS idx_captain_messages_conversation ON captain_messages(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_captain_output_conversation ON captain_output(conversation_id);
+
+    CREATE INDEX IF NOT EXISTS idx_project_stages_project ON project_stages(project_id, position);
+    CREATE INDEX IF NOT EXISTS idx_tasks_stage_position ON tasks(stage_id, position);
+    CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_claim ON tasks(claimed_by_run_id);
+    CREATE INDEX IF NOT EXISTS idx_task_activity_task ON task_activity(task_id, created_at);
   `);
 
   // Migrations: drop agent_id from docs (now top-level)
@@ -579,6 +668,31 @@ export function initializeSchema(db: Database.Database) {
       CREATE INDEX IF NOT EXISTS idx_runs_agent ON runs(agent_id);
       CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
     `);
+  }
+
+  // Migrations: add trigger_kind, watched_stage_id to jobs (for task-triggered jobs)
+  const jobCols4 = db.prepare(`PRAGMA table_info(jobs)`).all() as any[];
+  if (!jobCols4.some((c: any) => c.name === "trigger_kind")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN trigger_kind TEXT NOT NULL DEFAULT 'schedule'`);
+  }
+  if (!jobCols4.some((c: any) => c.name === "watched_stage_id")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN watched_stage_id TEXT REFERENCES project_stages(id) ON DELETE SET NULL`);
+  }
+
+  // Migrations: add task_id to runs (for task-triggered runs)
+  const runCols2 = db.prepare(`PRAGMA table_info(runs)`).all() as any[];
+  if (!runCols2.some((c: any) => c.name === "task_id")) {
+    db.exec(`ALTER TABLE runs ADD COLUMN task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_runs_task ON runs(task_id)`);
+  }
+
+  // Backfill: seed default board for any project that doesn't have one yet.
+  const projectsWithoutStages = db.prepare(`
+    SELECT p.id FROM projects p
+    WHERE NOT EXISTS (SELECT 1 FROM project_stages WHERE project_id = p.id)
+  `).all() as { id: string }[];
+  for (const p of projectsWithoutStages) {
+    seedDefaultBoardSql(db, p.id);
   }
 
   // Ensure encryption key exists (generates on first run)

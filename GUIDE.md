@@ -367,6 +367,81 @@ Content-Type: application/json
 
 Doc revisions are preserved automatically.
 
+## Tasks (Kanban Boards)
+
+Some agent jobs are triggered by **tasks** — kanban-style cards on a project board — instead of a schedule. The flow is the same (poll, work, finish), but with two added expectations: (1) read the task content and prior activity log, and (2) move the card to a new stage when you finish.
+
+### How a task-triggered run looks
+
+When the job that fires has `trigger_kind = "task_stage"`, the `/next` payload includes a `task` field and the `api.endpoints` section includes two extra entries:
+
+```json
+{
+  "run": { "id": "uuid", "status": "running", "task_id": "uuid" },
+  "job": { "id": "uuid", "name": "Writer", "instructions": "...", "trigger_kind": "task_stage" },
+  "task": {
+    "id": "uuid",
+    "title": "Write blog post: AI control planes",
+    "description": "Use the brand-voice doc...",
+    "project_id": "uuid",
+    "project_name": "Marketing",
+    "stage": { "id": "uuid", "name": "To Do", "is_terminal": false },
+    "legal_transitions": [
+      { "id": "uuid", "name": "Doing", "is_terminal": false }
+    ],
+    "activity": [
+      { "kind": "created", "to_stage_name": "To Do", "created_at": 1735689600 },
+      { "kind": "stage_change", "from_stage_name": "Review", "to_stage_name": "To Do",
+        "author_type": "agent", "author_name": "Reviewer",
+        "content": "Tone is too corporate; tighten the third paragraph." }
+    ]
+  },
+  "api": {
+    "endpoints": {
+      "move_task_stage": "PUT https://your-harbour.example.com/api/tasks/<task_id>/stage",
+      "post_task_activity": "POST https://your-harbour.example.com/api/tasks/<task_id>/activity",
+      "...": "..."
+    }
+  }
+}
+```
+
+### Required behavior for task-triggered runs
+
+1. **Read the activity log first.** The `task.activity` field contains the full history of comments and stage changes — including reviewer feedback that kicked the card back to your column. Acting on a card without reading why it was returned is the most common failure mode.
+2. **Do the work** described in `task.title` + `task.description`, using `job.instructions` as your standing process for cards in this column.
+3. **Move the card** before marking the run done. Pick one of `task.legal_transitions` (the API rejects illegal moves with a 409). Forward = "I'm done with my part"; backward (e.g. back to "To Do" with a comment) = "this needs more work."
+
+### Move a Task
+
+```
+PUT /api/tasks/:id/stage
+Content-Type: application/json
+
+{ "toStageId": "<one of legal_transitions[].id>", "comment": "Optional note explaining the move" }
+```
+
+The `comment` is recorded as part of the stage_change activity entry — use it when sending a card back to give the next agent (or the original author) actionable feedback.
+
+### Comment on a Task
+
+```
+POST /api/tasks/:id/activity
+Content-Type: application/json
+
+{ "content": "Halfway done — pulling stats from the API now." }
+```
+
+Use comments to log progress that doesn't yet warrant a stage change. They show up on the task detail page in the dashboard.
+
+### Why `done` requires a move
+
+If you set the run to `done` while the task is still in your watched stage, the API returns 409 — otherwise the same job would re-pick the same card forever. If you genuinely can't complete the work, set the run to `failed` with an explanation in a comment; that releases the claim and the card stays put for a human to triage.
+
+### Stages with no agent
+
+Some columns (typically a final QA or "Done" stage) have no job watching them. Cards land there and wait for a human to move them — that's the human-in-the-loop flow. Nothing for an agent to do; just move cards into those stages when your part of the work is finished.
+
 ## Reference Runner
 
 ```bash
