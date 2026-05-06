@@ -22,7 +22,7 @@ import {
 
 export function MobileBottomNav() {
   const pathname = usePathname();
-  const { waitingCount, activeProjectId } = useApp();
+  const { waitingCount } = useApp();
   const [moreOpen, setMoreOpen] = useState(false);
   const router = useRouter();
 
@@ -30,11 +30,11 @@ export function MobileBottomNav() {
     { href: "/captain", label: "Captain", icon: MessageSquare, match: (p: string) => p.startsWith("/captain") },
     { href: "/", label: "Runs", icon: Activity, badge: waitingCount, match: (p: string) => p === "/" || p.startsWith("/runs") },
     { href: "/jobs", label: "Jobs", icon: Briefcase, match: (p: string) => p.startsWith("/jobs") },
-    { href: "/agents", label: "Agents", icon: Bot, match: (p: string) => p.startsWith("/agents") },
+    { href: "/board", label: "Board", icon: KanbanSquare, match: (p: string) => p.startsWith("/board") },
   ];
 
   const moreLinks = [
-    ...(activeProjectId ? [{ href: "/board", label: "Board", icon: KanbanSquare }] : []),
+    { href: "/agents", label: "Agents", icon: Bot },
     { href: "/docs", label: "Docs", icon: FileText },
     { href: "/databases", label: "Databases", icon: Database },
     { href: "/env-vars", label: "Env Vars", icon: KeyRound },

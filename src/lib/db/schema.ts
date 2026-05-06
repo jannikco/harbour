@@ -7,11 +7,29 @@ import { encrypt } from "../encryption";
 import { dbPath, harbourHome, ensureDir } from "../paths";
 
 /**
- * Seed the default kanban board (To Do → Doing → Review → Done) for a project.
- * Exported via stages.ts; called from initializeSchema for backfill and from
- * createProject so every new project boots with a usable board.
+ * Create a board (optionally tied to a project) with the default kanban
+ * stages (To Do → Doing → Review → Done) and their transitions wired up.
+ * Returns the board id. Called from initializeSchema for backfill and from
+ * createProject + ensureDefaultBoard.
  */
-export function seedDefaultBoardSql(db: Database.Database, projectId: string) {
+export function createBoardWithDefaults(db: Database.Database, opts: {
+  name: string;
+  projectId?: string | null;
+}): string {
+  const boardId = uuid();
+  db.prepare(
+    `INSERT INTO boards (id, name, project_id) VALUES (?, ?, ?)`
+  ).run(boardId, opts.name, opts.projectId ?? null);
+  seedDefaultStagesSql(db, boardId);
+  return boardId;
+}
+
+/**
+ * Seed the four default stages and their canonical transitions on an
+ * already-existing board. Idempotent — safe to call multiple times because
+ * UNIQUE(board_id, name) blocks duplicates.
+ */
+export function seedDefaultStagesSql(db: Database.Database, boardId: string) {
   const stages = [
     { name: "To Do", position: 0, terminal: 0 },
     { name: "Doing", position: 1, terminal: 0 },
@@ -20,17 +38,16 @@ export function seedDefaultBoardSql(db: Database.Database, projectId: string) {
   ];
   const ids: Record<string, string> = {};
   const insertStage = db.prepare(
-    `INSERT INTO project_stages (id, project_id, name, position, is_terminal) VALUES (?, ?, ?, ?, ?)`
+    `INSERT INTO stages (id, board_id, name, position, is_terminal) VALUES (?, ?, ?, ?, ?)`
   );
   for (const s of stages) {
     const id = uuid();
     ids[s.name] = id;
-    insertStage.run(id, projectId, s.name, s.position, s.terminal);
+    insertStage.run(id, boardId, s.name, s.position, s.terminal);
   }
   const insertTransition = db.prepare(
     `INSERT OR IGNORE INTO stage_transitions (from_stage_id, to_stage_id) VALUES (?, ?)`
   );
-  // Forward flow + kick-back paths
   insertTransition.run(ids["To Do"], ids["Doing"]);
   insertTransition.run(ids["Doing"], ids["Review"]);
   insertTransition.run(ids["Doing"], ids["To Do"]);
@@ -85,6 +102,60 @@ export function resetDb() {
 }
 
 export function initializeSchema(db: Database.Database) {
+  // Pre-migration: the prior shape of the tasks feature used `project_stages`
+  // (project-scoped) and a project_id column on tasks. We've since refactored
+  // to a boards-first model where stages and tasks reference a board. Drop the
+  // old project-scoped tables so the new CREATE TABLE IF NOT EXISTS below
+  // builds the correct shape. Test data is intentionally not preserved.
+  const hasOldProjectStages = !!db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'project_stages'`
+  ).get();
+  if (hasOldProjectStages) {
+    db.pragma("foreign_keys = OFF");
+    db.exec(`UPDATE jobs SET watched_stage_id = NULL WHERE watched_stage_id IS NOT NULL`);
+    db.exec(`UPDATE runs SET task_id = NULL WHERE task_id IS NOT NULL`);
+    db.exec(`DROP TABLE IF EXISTS task_activity`);
+    db.exec(`DROP TABLE IF EXISTS tasks`);
+    db.exec(`DROP TABLE IF EXISTS stage_transitions`);
+    db.exec(`DROP TABLE IF EXISTS project_stages`);
+    // Rebuild jobs to drop the now-dangling FK on watched_stage_id (old target
+    // was project_stages, which we just dropped). The new FK to stages will
+    // be re-added by the migration block below.
+    const jobsCreate = (db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'jobs'`).get() as any)?.sql || "";
+    if (jobsCreate.includes("project_stages")) {
+      db.exec(`
+        CREATE TABLE jobs_new (
+          id TEXT PRIMARY KEY,
+          agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          description TEXT,
+          instructions TEXT,
+          schedule TEXT NOT NULL,
+          workflow_command TEXT,
+          active INTEGER NOT NULL DEFAULT 1,
+          last_run_at INTEGER,
+          next_run_at INTEGER,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          one_off INTEGER NOT NULL DEFAULT 0,
+          timeout_minutes INTEGER NOT NULL DEFAULT 30,
+          model TEXT,
+          thinking TEXT,
+          workflow_only INTEGER NOT NULL DEFAULT 0,
+          trigger_kind TEXT NOT NULL DEFAULT 'schedule',
+          watched_stage_id TEXT
+        );
+        INSERT INTO jobs_new (id, agent_id, name, description, instructions, schedule, workflow_command, active, last_run_at, next_run_at, created_at, updated_at, one_off, timeout_minutes, model, thinking, workflow_only, trigger_kind, watched_stage_id)
+          SELECT id, agent_id, name, description, instructions, schedule, workflow_command, active, last_run_at, next_run_at, created_at, updated_at, one_off, timeout_minutes, model, thinking, workflow_only, trigger_kind, watched_stage_id FROM jobs;
+        DROP TABLE jobs;
+        ALTER TABLE jobs_new RENAME TO jobs;
+        CREATE INDEX IF NOT EXISTS idx_jobs_agent ON jobs(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_jobs_schedule ON jobs(agent_id, active, next_run_at);
+      `);
+    }
+    db.pragma("foreign_keys = ON");
+  }
+
   db.exec(`
     -- Users: human accounts for dashboard auth
     CREATE TABLE IF NOT EXISTS users (
@@ -354,30 +425,41 @@ export function initializeSchema(db: Database.Database) {
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
 
-    -- Project stages: kanban columns belonging to a project
-    CREATE TABLE IF NOT EXISTS project_stages (
+    -- Boards: kanban canvas. Top-level entity, may optionally belong to a project.
+    -- Solo install has one top-level board (project_id IS NULL). Multi-project
+    -- installs create one board per project (project_id set).
+    CREATE TABLE IF NOT EXISTS boards (
       id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+
+    -- Stages: kanban columns belonging to a board
+    CREATE TABLE IF NOT EXISTS stages (
+      id TEXT PRIMARY KEY,
+      board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       position INTEGER NOT NULL,
       is_terminal INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      UNIQUE(project_id, name)
+      UNIQUE(board_id, name)
     );
 
     -- Stage transitions: directed edges of legal moves between stages
     CREATE TABLE IF NOT EXISTS stage_transitions (
-      from_stage_id TEXT NOT NULL REFERENCES project_stages(id) ON DELETE CASCADE,
-      to_stage_id   TEXT NOT NULL REFERENCES project_stages(id) ON DELETE CASCADE,
+      from_stage_id TEXT NOT NULL REFERENCES stages(id) ON DELETE CASCADE,
+      to_stage_id   TEXT NOT NULL REFERENCES stages(id) ON DELETE CASCADE,
       PRIMARY KEY (from_stage_id, to_stage_id)
     );
 
-    -- Tasks: kanban cards in a project
+    -- Tasks: kanban cards on a board
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      stage_id TEXT NOT NULL REFERENCES project_stages(id),
+      board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      stage_id TEXT NOT NULL REFERENCES stages(id),
       title TEXT NOT NULL,
       description TEXT,
       position INTEGER NOT NULL,
@@ -395,8 +477,8 @@ export function initializeSchema(db: Database.Database) {
       task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
       run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
       kind TEXT NOT NULL CHECK(kind IN ('comment','stage_change','created','claimed','released')),
-      from_stage_id TEXT REFERENCES project_stages(id),
-      to_stage_id TEXT REFERENCES project_stages(id),
+      from_stage_id TEXT REFERENCES stages(id),
+      to_stage_id TEXT REFERENCES stages(id),
       author_type TEXT NOT NULL CHECK(author_type IN ('user','agent','system')),
       author_id TEXT,
       author_name TEXT,
@@ -426,9 +508,10 @@ export function initializeSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_captain_messages_conversation ON captain_messages(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_captain_output_conversation ON captain_output(conversation_id);
 
-    CREATE INDEX IF NOT EXISTS idx_project_stages_project ON project_stages(project_id, position);
+    CREATE INDEX IF NOT EXISTS idx_boards_project ON boards(project_id);
+    CREATE INDEX IF NOT EXISTS idx_stages_board ON stages(board_id, position);
     CREATE INDEX IF NOT EXISTS idx_tasks_stage_position ON tasks(stage_id, position);
-    CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_board ON tasks(board_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_claim ON tasks(claimed_by_run_id);
     CREATE INDEX IF NOT EXISTS idx_task_activity_task ON task_activity(task_id, created_at);
   `);
@@ -676,7 +759,7 @@ export function initializeSchema(db: Database.Database) {
     db.exec(`ALTER TABLE jobs ADD COLUMN trigger_kind TEXT NOT NULL DEFAULT 'schedule'`);
   }
   if (!jobCols4.some((c: any) => c.name === "watched_stage_id")) {
-    db.exec(`ALTER TABLE jobs ADD COLUMN watched_stage_id TEXT REFERENCES project_stages(id) ON DELETE SET NULL`);
+    db.exec(`ALTER TABLE jobs ADD COLUMN watched_stage_id TEXT REFERENCES stages(id) ON DELETE SET NULL`);
   }
 
   // Migrations: add task_id to runs (for task-triggered runs)
@@ -686,13 +769,21 @@ export function initializeSchema(db: Database.Database) {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_runs_task ON runs(task_id)`);
   }
 
-  // Backfill: seed default board for any project that doesn't have one yet.
-  const projectsWithoutStages = db.prepare(`
-    SELECT p.id FROM projects p
-    WHERE NOT EXISTS (SELECT 1 FROM project_stages WHERE project_id = p.id)
-  `).all() as { id: string }[];
-  for (const p of projectsWithoutStages) {
-    seedDefaultBoardSql(db, p.id);
+  // Backfill: ensure every project has a board, and that there's exactly one
+  // top-level (project_id IS NULL) board for solo installs that haven't yet
+  // created any project. Each new board boots with default stages.
+  const projectsWithoutBoard = db.prepare(`
+    SELECT p.id, p.name FROM projects p
+    WHERE NOT EXISTS (SELECT 1 FROM boards WHERE project_id = p.id)
+  `).all() as { id: string; name: string }[];
+  for (const p of projectsWithoutBoard) {
+    createBoardWithDefaults(db, { name: "Tasks", projectId: p.id });
+  }
+  const hasTopLevelBoard = !!db.prepare(
+    `SELECT 1 FROM boards WHERE project_id IS NULL LIMIT 1`
+  ).get();
+  if (!hasTopLevelBoard) {
+    createBoardWithDefaults(db, { name: "Tasks", projectId: null });
   }
 
   // Ensure encryption key exists (generates on first run)

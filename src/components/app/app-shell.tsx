@@ -69,6 +69,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, [projects, activeProjectId, projectStateLoaded]);
 
+  // Solo install convenience: when there's exactly one project and the user
+  // hasn't picked one (no localStorage entry), make it the active project.
+  // Multi-project users keep their choice (or the default "All Projects").
+  useEffect(() => {
+    if (!projectStateLoaded || activeProjectId) return;
+    const stored = localStorage.getItem("harbour_active_project");
+    if (stored !== null) return;
+    if (projects.length === 1) {
+      setActiveProjectId(projects[0].id);
+    }
+  }, [projects, activeProjectId, projectStateLoaded]);
+
   // Fetch system timezone
   const { data: timezone = Intl.DateTimeFormat().resolvedOptions().timeZone } = useQuery({
     queryKey: ["settings", "timezone"],

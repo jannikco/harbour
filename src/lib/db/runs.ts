@@ -600,30 +600,34 @@ function buildRunPayload(runId: string) {
   let task: any = null;
   if (run.task_id) {
     const taskRow = db.prepare(`
-      SELECT t.*, s.name AS stage_name, s.is_terminal AS stage_is_terminal, p.name AS project_name
+      SELECT t.*, s.name AS stage_name, s.is_terminal AS stage_is_terminal,
+             b.name AS board_name, b.project_id, p.name AS project_name
       FROM tasks t
-      JOIN project_stages s ON t.stage_id = s.id
-      JOIN projects p ON t.project_id = p.id
+      JOIN stages s ON t.stage_id = s.id
+      JOIN boards b ON t.board_id = b.id
+      LEFT JOIN projects p ON b.project_id = p.id
       WHERE t.id = ?
     `).get(run.task_id) as any;
     if (taskRow) {
       const legalIds = getLegalTransitions(taskRow.stage_id);
       const stages = legalIds.length > 0
         ? db.prepare(
-            `SELECT id, name, is_terminal FROM project_stages WHERE id IN (${legalIds.map(() => "?").join(",")})`
+            `SELECT id, name, is_terminal FROM stages WHERE id IN (${legalIds.map(() => "?").join(",")})`
           ).all(...legalIds) as any[]
         : [];
       const activityRows = listTaskActivity(run.task_id);
       // Resolve stage names for activity entries that reference stage transitions
       const stageNameMap: Record<string, string> = {};
       const allStages = db.prepare(
-        `SELECT id, name FROM project_stages WHERE project_id = ?`
-      ).all(taskRow.project_id) as { id: string; name: string }[];
+        `SELECT id, name FROM stages WHERE board_id = ?`
+      ).all(taskRow.board_id) as { id: string; name: string }[];
       for (const s of allStages) stageNameMap[s.id] = s.name;
       task = {
         id: taskRow.id,
         title: taskRow.title,
         description: taskRow.description,
+        board_id: taskRow.board_id,
+        board_name: taskRow.board_name,
         project_id: taskRow.project_id,
         project_name: taskRow.project_name,
         stage: {

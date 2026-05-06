@@ -6,7 +6,7 @@ import {
   listTaskActivity,
   updateTask,
   deleteTask,
-  listStagesForProject,
+  listStagesForBoard,
 } from "@/lib/db/queries";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -17,7 +17,7 @@ export const GET = withAuth(async (_req: NextRequest, _auth, ctx) => {
   if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
   const activity = listTaskActivity(id);
   // Resolve stage names for stage_change activity entries
-  const stages = listStagesForProject(task.project_id);
+  const stages = listStagesForBoard(task.board_id);
   const stageMap: Record<string, string> = {};
   for (const s of stages) stageMap[s.id] = s.name;
   const enriched = activity.map(a => ({

@@ -4,7 +4,7 @@ import { isTransitionLegal, getStageById } from "./stages";
 
 export type Task = {
   id: string;
-  project_id: string;
+  board_id: string;
   stage_id: string;
   title: string;
   description: string | null;
@@ -48,7 +48,7 @@ function bottomPosition(stageId: string): number {
 }
 
 export function createTask(data: {
-  projectId: string;
+  boardId: string;
   stageId: string;
   title: string;
   description?: string | null;
@@ -60,7 +60,7 @@ export function createTask(data: {
   const db = getDb();
   const stage = getStageById(data.stageId);
   if (!stage) throw new Error("stage not found");
-  if (stage.project_id !== data.projectId) throw new Error("stage does not belong to project");
+  if (stage.board_id !== data.boardId) throw new Error("stage does not belong to board");
 
   const id = uuid();
   const insertAt = data.insertAt ?? "bottom";
@@ -68,11 +68,11 @@ export function createTask(data: {
 
   db.transaction(() => {
     db.prepare(
-      `INSERT INTO tasks (id, project_id, stage_id, title, description, position, created_by_type, created_by_id)
+      `INSERT INTO tasks (id, board_id, stage_id, title, description, position, created_by_type, created_by_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       id,
-      data.projectId,
+      data.boardId,
       data.stageId,
       data.title,
       data.description ?? null,
@@ -102,31 +102,32 @@ export function getTaskById(id: string): Task | null {
   return (db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id) as Task) || null;
 }
 
-export function getTaskWithStage(id: string): (Task & { stage_name: string; project_name: string }) | null {
+export function getTaskWithStage(id: string) {
   const db = getDb();
   return (db.prepare(`
-    SELECT t.*, s.name AS stage_name, p.name AS project_name
+    SELECT t.*, s.name AS stage_name, b.name AS board_name, b.project_id, p.name AS project_name
     FROM tasks t
-    JOIN project_stages s ON t.stage_id = s.id
-    JOIN projects p ON t.project_id = p.id
+    JOIN stages s ON t.stage_id = s.id
+    JOIN boards b ON t.board_id = b.id
+    LEFT JOIN projects p ON b.project_id = p.id
     WHERE t.id = ?
   `).get(id) as any) || null;
 }
 
-export function listTasksByProject(projectId: string, opts: { includeArchived?: boolean } = {}) {
+export function listTasksByBoard(boardId: string, opts: { includeArchived?: boolean } = {}) {
   const db = getDb();
-  const where = opts.includeArchived ? `t.project_id = ?` : `t.project_id = ? AND t.archived_at IS NULL`;
+  const where = opts.includeArchived ? `t.board_id = ?` : `t.board_id = ? AND t.archived_at IS NULL`;
   return db.prepare(`
     SELECT t.*, s.name AS stage_name,
       a.id AS claimed_run_agent_id,
       a.name AS claimed_run_agent_name
     FROM tasks t
-    JOIN project_stages s ON t.stage_id = s.id
+    JOIN stages s ON t.stage_id = s.id
     LEFT JOIN runs r ON t.claimed_by_run_id = r.id
     LEFT JOIN agents a ON r.agent_id = a.id
     WHERE ${where}
     ORDER BY s.position ASC, t.position ASC
-  `).all(projectId);
+  `).all(boardId);
 }
 
 export function listTasksByStage(stageId: string) {
@@ -161,7 +162,6 @@ export function archiveTask(id: string) {
   db.prepare(`UPDATE tasks SET archived_at = unixepoch(), updated_at = unixepoch() WHERE id = ?`).run(id);
 }
 
-/** Reposition a task within its stage; bumps position to top by default. */
 export function reorderTaskToTop(taskId: string) {
   const db = getDb();
   const task = getTaskById(taskId);
@@ -213,7 +213,6 @@ export function listTaskActivity(taskId: string) {
 
 /**
  * Atomically claim a task for a run. Returns true if this caller won the race.
- * Used by the runs poller (step 4.5).
  */
 export function claimTaskForRun(taskId: string, runId: string): boolean {
   const db = getDb();
@@ -254,10 +253,10 @@ export function moveTaskToStage(taskId: string, toStageId: string, actor: {
 
   const target = getStageById(toStageId);
   if (!target) return { ok: false, reason: "target stage not found" };
-  if (target.project_id !== task.project_id) return { ok: false, reason: "target stage is in a different project" };
+  if (target.board_id !== task.board_id) return { ok: false, reason: "target stage is on a different board" };
 
   if (!isTransitionLegal(task.stage_id, toStageId)) {
-    return { ok: false, reason: "transition is not allowed by the project board" };
+    return { ok: false, reason: "transition is not allowed by the board" };
   }
 
   const fromStageId = task.stage_id;

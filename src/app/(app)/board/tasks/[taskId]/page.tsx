@@ -34,8 +34,10 @@ type TaskActivity = {
 
 type TaskDetail = {
   id: string;
-  project_id: string;
-  project_name: string;
+  board_id: string;
+  board_name: string;
+  project_id: string | null;
+  project_name: string | null;
   stage_id: string;
   stage_name: string;
   title: string;
@@ -71,10 +73,10 @@ export default function TaskDetailPage({ params }: { params: Promise<{ taskId: s
   });
 
   const { data: stages = [] } = useQuery<StageWithTransitions[]>({
-    queryKey: ["stages", task?.project_id],
+    queryKey: ["stages", task?.board_id],
     queryFn: async () => {
       if (!task) return [];
-      const res = await fetch(`/api/projects/${task.project_id}/stages`);
+      const res = await fetch(`/api/boards/${task.board_id}/stages`);
       if (!res.ok) return [];
       return res.json();
     },
@@ -106,7 +108,8 @@ export default function TaskDetailPage({ params }: { params: Promise<{ taskId: s
       return;
     }
     queryClient.invalidateQueries({ queryKey: ["task", taskId] });
-    queryClient.invalidateQueries({ queryKey: ["board", task!.project_id] });
+    queryClient.invalidateQueries({ queryKey: ["board", task!.board_id] });
+    queryClient.invalidateQueries({ queryKey: ["boards"] });
   }
 
   async function postComment(e: React.FormEvent) {
@@ -134,7 +137,7 @@ export default function TaskDetailPage({ params }: { params: Promise<{ taskId: s
 
       <div className="space-y-2">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>{task.project_name}</span>
+          <span>{task.project_name ?? task.board_name}</span>
           <ChevronRight className="h-3 w-3" />
           <Badge variant="outline" className="text-[10px]">{task.stage_name}</Badge>
           {claimed && (

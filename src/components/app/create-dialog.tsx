@@ -17,8 +17,8 @@ import { uploadFileToRun } from "@/lib/upload-client";
 type Agent = { id: string; name: string; type: string; cli: string | null; model: string | null; thinking: string | null; remote: number | null };
 type Doc = { id: string; title: string; pinned: number };
 type EnvVar = { id: string; name: string; pinned: number };
-type ProjectStage = { id: string; project_id: string; name: string };
-type Project = { id: string; name: string };
+type Board = { id: string; name: string; project_id: string | null; project_name: string | null };
+type Stage = { id: string; board_id: string; name: string };
 
 // Sub-dialog for picking docs or env vars
 export function PickerDialog({
@@ -180,28 +180,28 @@ export function CreateDialog({
   const [agentEnabled, setAgentEnabled] = useState(true);
   const [workflowEnabled, setWorkflowEnabled] = useState(false);
   const [triggerKind, setTriggerKind] = useState<"schedule" | "task_stage">("schedule");
-  const [taskProjectId, setTaskProjectId] = useState("");
+  const [watchedBoardId, setWatchedBoardId] = useState("");
   const [watchedStageId, setWatchedStageId] = useState("");
 
-  const { data: allProjects = [] } = useQuery<Project[]>({
-    queryKey: ["projects"],
+  const { data: allBoards = [] } = useQuery<Board[]>({
+    queryKey: ["boards"],
     queryFn: async () => {
-      const res = await fetch("/api/projects");
+      const res = await fetch("/api/boards");
       if (!res.ok) return [];
       return res.json();
     },
     staleTime: 60_000,
   });
 
-  const { data: stagesForProject = [] } = useQuery<ProjectStage[]>({
-    queryKey: ["stages", taskProjectId],
+  const { data: stagesForBoard = [] } = useQuery<Stage[]>({
+    queryKey: ["stages", watchedBoardId],
     queryFn: async () => {
-      if (!taskProjectId) return [];
-      const res = await fetch(`/api/projects/${taskProjectId}/stages`);
+      if (!watchedBoardId) return [];
+      const res = await fetch(`/api/boards/${watchedBoardId}/stages`);
       if (!res.ok) return [];
       return res.json();
     },
-    enabled: !!taskProjectId,
+    enabled: !!watchedBoardId,
   });
 
   useEffect(() => {
@@ -254,7 +254,7 @@ export function CreateDialog({
     setAgentEnabled(true);
     setWorkflowEnabled(false);
     setTriggerKind("schedule");
-    setTaskProjectId("");
+    setWatchedBoardId("");
     setWatchedStageId("");
     setLoaded(false);
   }
@@ -336,8 +336,8 @@ export function CreateDialog({
     e.preventDefault();
     const isWorkflowOnly = workflowEnabled && !agentEnabled;
     if (!name.trim() || (!isWorkflowOnly && !agentId)) return;
-    if (triggerKind === "task_stage" && (!taskProjectId || !watchedStageId)) {
-      alert("Pick a project and stage to watch.");
+    if (triggerKind === "task_stage" && (!watchedBoardId || !watchedStageId)) {
+      alert("Pick a board and stage to watch.");
       return;
     }
 
@@ -363,9 +363,13 @@ export function CreateDialog({
     if (!res.ok) { alert("Failed to create job"); return; }
 
     // Auto-link the job to the active project, or to the project owning the
-    // watched stage if no active project but trigger is task_stage.
+    // watched board (if any) when the trigger is task_stage.
     const data = await res.json();
-    const targetProjectId = activeProjectId || (triggerKind === "task_stage" ? taskProjectId : null);
+    let targetProjectId: string | null = activeProjectId;
+    if (!targetProjectId && triggerKind === "task_stage" && watchedBoardId) {
+      const watchedBoard = allBoards.find(b => b.id === watchedBoardId);
+      targetProjectId = watchedBoard?.project_id ?? null;
+    }
     if (targetProjectId && data.id) {
       await fetch(`/api/projects/${targetProjectId}`, {
         method: "PATCH",
@@ -579,16 +583,18 @@ export function CreateDialog({
                 ) : (
                   <>
                     <div className="space-y-2">
-                      <Label>Project</Label>
+                      <Label>Board</Label>
                       <select
-                        value={taskProjectId}
-                        onChange={e => { setTaskProjectId(e.target.value); setWatchedStageId(""); }}
+                        value={watchedBoardId}
+                        onChange={e => { setWatchedBoardId(e.target.value); setWatchedStageId(""); }}
                         className={SELECT_CLASS}
                         required
                       >
-                        <option value="">Select a project...</option>
-                        {allProjects.map(p => (
-                          <option key={p.id} value={p.id}>{p.name}</option>
+                        <option value="">Select a board...</option>
+                        {allBoards.map(b => (
+                          <option key={b.id} value={b.id}>
+                            {b.name}{b.project_name ? ` (${b.project_name})` : ""}
+                          </option>
                         ))}
                       </select>
                     </div>
@@ -598,16 +604,16 @@ export function CreateDialog({
                         value={watchedStageId}
                         onChange={e => setWatchedStageId(e.target.value)}
                         className={SELECT_CLASS}
-                        disabled={!taskProjectId}
+                        disabled={!watchedBoardId}
                         required
                       >
                         <option value="">Select a stage...</option>
-                        {stagesForProject.map(s => (
+                        {stagesForBoard.map(s => (
                           <option key={s.id} value={s.id}>{s.name}</option>
                         ))}
                       </select>
-                      {taskProjectId && stagesForProject.length === 0 && (
-                        <p className="text-xs text-muted-foreground">This project has no stages.</p>
+                      {watchedBoardId && stagesForBoard.length === 0 && (
+                        <p className="text-xs text-muted-foreground">This board has no stages.</p>
                       )}
                     </div>
                   </>

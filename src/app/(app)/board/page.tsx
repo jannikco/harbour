@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/app/empty-state";
+import { useApp } from "@/components/app/app-context";
 import { useActiveProjectId } from "@/lib/hooks/use-project-filter";
 import { Plus, KanbanSquare, Bot, Settings, MoreHorizontal, ChevronRight } from "lucide-react";
 import { CreateTaskDialog } from "@/components/app/create-task-dialog";
@@ -19,7 +21,7 @@ import {
 
 type StageWithTasks = {
   id: string;
-  project_id: string;
+  board_id: string;
   name: string;
   position: number;
   is_terminal: number;
@@ -30,7 +32,7 @@ type StageWithTasks = {
 
 type Task = {
   id: string;
-  project_id: string;
+  board_id: string;
   stage_id: string;
   stage_name: string;
   title: string;
@@ -42,35 +44,182 @@ type Task = {
   created_at: number;
 };
 
+type Board = {
+  id: string;
+  name: string;
+  project_id: string | null;
+  project_name: string | null;
+  stage_count: number;
+  task_count: number;
+};
+
 type BoardData = {
-  project: { id: string; name: string };
+  board: { id: string; name: string; project_id: string | null };
   stages: StageWithTasks[];
 };
 
 export default function BoardPage() {
   const projectId = useActiveProjectId();
+  const { setActiveProjectId } = useApp();
+  const queryClient = useQueryClient();
+  const searchParams = useSearchParams();
+  const explicitBoardId = searchParams.get("boardId");
+
+  // Always fetch all boards — needed to decide whether to render the index
+  // (multiple boards in All Projects mode) vs a single board view.
+  const { data: boards = [], isLoading: boardsLoading } = useQuery<Board[]>({
+    queryKey: ["boards"],
+    queryFn: async () => {
+      const res = await fetch("/api/boards");
+      if (!res.ok) return [];
+      return res.json();
+    },
+    refetchInterval: 10000,
+  });
+
+  // Resolve which board to render (if any). Rules:
+  // - ?boardId=X in URL → that specific board (used for top-level navigation)
+  // - Active project → that project's board
+  // - No active project + exactly 1 board total → that board
+  // - Otherwise (no active project + 2+ boards) → render index instead
+  const activeBoard = useMemo<Board | null>(() => {
+    if (boards.length === 0) return null;
+    if (explicitBoardId) {
+      return boards.find(b => b.id === explicitBoardId) ?? null;
+    }
+    if (projectId) {
+      return boards.find(b => b.project_id === projectId) ?? null;
+    }
+    if (boards.length === 1) return boards[0];
+    return null;
+  }, [boards, projectId, explicitBoardId]);
+
+  const showIndex = !boardsLoading && !activeBoard && boards.length > 1;
+  const showEmpty = !boardsLoading && boards.length === 0;
+
+  if (showEmpty) {
+    return <CreateFirstBoard onCreated={() => queryClient.invalidateQueries({ queryKey: ["boards"] })} />;
+  }
+
+  if (showIndex) {
+    return <BoardsIndex boards={boards} setActiveProjectId={setActiveProjectId} />;
+  }
+
+  if (!activeBoard) {
+    return <div className="text-sm text-muted-foreground py-12 text-center">Loading...</div>;
+  }
+
+  return (
+    <BoardView
+      board={activeBoard}
+      onChange={() => queryClient.invalidateQueries({ queryKey: ["boards"] })}
+    />
+  );
+}
+
+function CreateFirstBoard({ onCreated }: { onCreated: () => void }) {
+  const [name, setName] = useState("Tasks");
+  const [creating, setCreating] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || creating) return;
+    setCreating(true);
+    const res = await fetch("/api/boards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim(), projectId: null }),
+    });
+    setCreating(false);
+    if (!res.ok) return alert("Failed to create board");
+    onCreated();
+  }
+
+  return (
+    <div className="max-w-md mx-auto pt-12 space-y-4">
+      <EmptyState large icon={<KanbanSquare className="h-10 w-10 text-muted-foreground/40" />}>
+        <div className="space-y-3 mt-2">
+          <p>Create your first board to get started.</p>
+        </div>
+      </EmptyState>
+      <form onSubmit={submit} className="flex gap-2">
+        <input
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="Board name"
+          className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
+          autoFocus
+        />
+        <Button type="submit" disabled={creating || !name.trim()}>
+          {creating ? "Creating..." : "Create board"}
+        </Button>
+      </form>
+    </div>
+  );
+}
+
+function BoardsIndex({
+  boards,
+  setActiveProjectId,
+}: {
+  boards: Board[];
+  setActiveProjectId: (id: string | null) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Boards</h1>
+        <p className="text-sm text-muted-foreground mt-1">All boards across your projects.</p>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {boards.map(b => (
+          <Link
+            key={b.id}
+            href={b.project_id ? "/board" : `/board?boardId=${b.id}`}
+            onClick={() => {
+              // Project boards: set active project so the sidebar filters
+              // everything to that project. Top-level boards: clear active
+              // project (the URL's boardId param drives the view).
+              setActiveProjectId(b.project_id);
+            }}
+            className="rounded-lg border bg-card p-4 hover:border-primary/30 transition-colors"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                <KanbanSquare className="h-5 w-5 text-primary" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium">{b.name}</div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  {b.project_name ? b.project_name : "Top-level"}
+                </div>
+                <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+                  <span>{b.task_count} task{b.task_count === 1 ? "" : "s"}</span>
+                  <span>{b.stage_count} stage{b.stage_count === 1 ? "" : "s"}</span>
+                </div>
+              </div>
+            </div>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BoardView({ board, onChange }: { board: { id: string; name: string; project_id: string | null }; onChange: () => void }) {
   const queryClient = useQueryClient();
   const [createTarget, setCreateTarget] = useState<{ stageId: string; stageName: string } | null>(null);
 
   const { data, isLoading } = useQuery<BoardData>({
-    queryKey: ["board", projectId],
+    queryKey: ["board", board.id],
     queryFn: async () => {
-      if (!projectId) return null as any;
-      const res = await fetch(`/api/projects/${projectId}/board`);
-      if (!res.ok) return null as any;
+      const res = await fetch(`/api/boards/${board.id}`);
+      if (!res.ok) throw new Error("not found");
       return res.json();
     },
-    enabled: !!projectId,
     refetchInterval: 5000,
   });
-
-  if (!projectId) {
-    return (
-      <EmptyState large icon={<KanbanSquare className="h-10 w-10 text-muted-foreground/40" />}>
-        Select a project to see its board.
-      </EmptyState>
-    );
-  }
 
   if (isLoading || !data) {
     return <div className="text-sm text-muted-foreground py-12 text-center">Loading...</div>;
@@ -87,7 +236,8 @@ export default function BoardPage() {
       alert(err.error || "Move failed");
       return;
     }
-    queryClient.invalidateQueries({ queryKey: ["board", projectId] });
+    queryClient.invalidateQueries({ queryKey: ["board", board.id] });
+    queryClient.invalidateQueries({ queryKey: ["boards"] });
   }
 
   async function deleteTask(task: Task) {
@@ -97,7 +247,9 @@ export default function BoardPage() {
       alert("Delete failed");
       return;
     }
-    queryClient.invalidateQueries({ queryKey: ["board", projectId] });
+    queryClient.invalidateQueries({ queryKey: ["board", board.id] });
+    queryClient.invalidateQueries({ queryKey: ["boards"] });
+    onChange();
   }
 
   const stageById: Record<string, StageWithTasks> = {};
@@ -107,9 +259,9 @@ export default function BoardPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Board</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{data.board.name}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Tasks for <span className="font-medium text-foreground">{data.project.name}</span>.
+            {data.board.project_id ? "Project board" : "Top-level board"}
           </p>
         </div>
         <div className="flex gap-2">
@@ -164,10 +316,7 @@ export default function BoardPage() {
                       key={task.id}
                       className={`group relative rounded-md border bg-background p-2.5 hover:border-primary/30 transition-colors ${claimed ? "ring-1 ring-amber-500/30" : ""}`}
                     >
-                      <Link
-                        href={`/board/tasks/${task.id}`}
-                        className="block"
-                      >
+                      <Link href={`/board/tasks/${task.id}`} className="block">
                         <div className="text-sm font-medium leading-snug pr-6">{task.title}</div>
                         {task.description && (
                           <div className="text-xs text-muted-foreground line-clamp-2 mt-1">
@@ -224,10 +373,13 @@ export default function BoardPage() {
         <CreateTaskDialog
           open={!!createTarget}
           onOpenChange={open => { if (!open) setCreateTarget(null); }}
-          projectId={projectId}
+          boardId={board.id}
           stageId={createTarget.stageId}
           stageName={createTarget.stageName}
-          onCreated={() => queryClient.invalidateQueries({ queryKey: ["board", projectId] })}
+          onCreated={() => {
+            queryClient.invalidateQueries({ queryKey: ["board", board.id] });
+            queryClient.invalidateQueries({ queryKey: ["boards"] });
+          }}
         />
       )}
     </div>

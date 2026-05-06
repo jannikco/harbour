@@ -10,14 +10,14 @@ import { Button } from "@/components/ui/button";
 export function CreateTaskDialog({
   open,
   onOpenChange,
-  projectId,
+  boardId,
   stageId,
   stageName,
   onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  projectId: string;
+  boardId: string;
   stageId: string;
   stageName: string;
   onCreated: () => void;
@@ -41,7 +41,7 @@ export function CreateTaskDialog({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        projectId,
+        boardId,
         stageId,
         title: title.trim(),
         description: description.trim() || undefined,

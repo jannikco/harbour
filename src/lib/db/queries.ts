@@ -11,5 +11,6 @@ export * from "./admin-api-keys";
 export * from "./attachments";
 export * from "./video-processing";
 export * from "./captain";
+export * from "./boards";
 export * from "./stages";
 export * from "./tasks";

@@ -1,4 +1,4 @@
-import { getDb, seedDefaultBoardSql } from "./schema";
+import { getDb, createBoardWithDefaults } from "./schema";
 import { v4 as uuid } from "uuid";
 
 // --- Project CRUD ---
@@ -8,7 +8,9 @@ export function createProject(name: string) {
   const id = uuid();
   db.transaction(() => {
     db.prepare(`INSERT INTO projects (id, name) VALUES (?, ?)`).run(id, name);
-    seedDefaultBoardSql(db, id);
+    // Auto-create a board for this project so the kanban view is immediately
+    // usable. The user can rename or restructure the board afterwards.
+    createBoardWithDefaults(db, { name: "Tasks", projectId: id });
   })();
   return getProjectById(id);
 }

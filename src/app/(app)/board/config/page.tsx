@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,7 @@ import { EmptyState } from "@/components/app/empty-state";
 
 type Stage = {
   id: string;
+  board_id: string;
   name: string;
   position: number;
   is_terminal: number;
@@ -20,9 +21,30 @@ type Stage = {
   jobs_watching: number;
 };
 
+type Board = {
+  id: string;
+  name: string;
+  project_id: string | null;
+  stage_count: number;
+  task_count: number;
+};
+
 export default function BoardConfigPage() {
   const projectId = useActiveProjectId();
   const queryClient = useQueryClient();
+
+  const { data: boards = [] } = useQuery<Board[]>({
+    queryKey: ["boards"],
+    queryFn: async () => (await fetch("/api/boards")).json(),
+  });
+
+  const board = useMemo<Board | null>(() => {
+    if (boards.length === 0) return null;
+    if (projectId) return boards.find(b => b.project_id === projectId) ?? null;
+    if (boards.length === 1) return boards[0];
+    return null;
+  }, [boards, projectId]);
+
   const [newStageName, setNewStageName] = useState("");
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -31,18 +53,16 @@ export default function BoardConfigPage() {
   const [dirty, setDirty] = useState(false);
 
   const { data: stages = [] } = useQuery<Stage[]>({
-    queryKey: ["stages", projectId],
+    queryKey: ["stages", board?.id],
     queryFn: async () => {
-      if (!projectId) return [];
-      const res = await fetch(`/api/projects/${projectId}/stages`);
+      if (!board) return [];
+      const res = await fetch(`/api/boards/${board.id}/stages`);
       if (!res.ok) return [];
       return res.json();
     },
-    enabled: !!projectId,
+    enabled: !!board,
   });
 
-  // Sync draft state from server-fetched stages whenever the data changes and
-  // the user hasn't started editing.
   useEffect(() => {
     if (!stages || dirty) return;
     const t: Record<string, string[]> = {};
@@ -51,9 +71,9 @@ export default function BoardConfigPage() {
     setDraftOrder(stages.map(s => s.id));
   }, [stages, dirty]);
 
-  if (!projectId) {
+  if (!board) {
     return (
-      <EmptyState large>Select a project first.</EmptyState>
+      <EmptyState large>Select a board to configure its stages.</EmptyState>
     );
   }
 
@@ -81,15 +101,12 @@ export default function BoardConfigPage() {
   }
 
   async function saveBoardLayout() {
-    if (saving) return;
+    if (saving || !board) return;
     setSaving(true);
-    const res = await fetch(`/api/projects/${projectId}/stages`, {
+    const res = await fetch(`/api/boards/${board.id}/stages`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        order: draftOrder,
-        transitions: draftTransitions,
-      }),
+      body: JSON.stringify({ order: draftOrder, transitions: draftTransitions }),
     });
     setSaving(false);
     if (!res.ok) {
@@ -98,15 +115,16 @@ export default function BoardConfigPage() {
       return;
     }
     setDirty(false);
-    queryClient.invalidateQueries({ queryKey: ["stages", projectId] });
+    queryClient.invalidateQueries({ queryKey: ["stages", board.id] });
   }
 
   async function createStage(e: React.FormEvent) {
     e.preventDefault();
+    if (!board) return;
     const name = newStageName.trim();
     if (!name || creating) return;
     setCreating(true);
-    const res = await fetch(`/api/projects/${projectId}/stages`, {
+    const res = await fetch(`/api/boards/${board.id}/stages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
@@ -118,49 +136,45 @@ export default function BoardConfigPage() {
     }
     setNewStageName("");
     setDirty(false);
-    queryClient.invalidateQueries({ queryKey: ["stages", projectId] });
+    queryClient.invalidateQueries({ queryKey: ["stages", board.id] });
   }
 
   async function deleteStage(stage: Stage) {
+    if (!board) return;
     if (!confirm(`Delete stage "${stage.name}"?`)) return;
-    const res = await fetch(`/api/projects/${projectId}/stages/${stage.id}`, { method: "DELETE" });
+    const res = await fetch(`/api/boards/${board.id}/stages/${stage.id}`, { method: "DELETE" });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: "delete failed" }));
       alert(err.error || "Delete failed");
       return;
     }
     setDirty(false);
-    queryClient.invalidateQueries({ queryKey: ["stages", projectId] });
+    queryClient.invalidateQueries({ queryKey: ["stages", board.id] });
   }
 
   async function toggleTerminal(stage: Stage) {
-    const res = await fetch(`/api/projects/${projectId}/stages/${stage.id}`, {
+    if (!board) return;
+    const res = await fetch(`/api/boards/${board.id}/stages/${stage.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_terminal: !stage.is_terminal }),
     });
-    if (!res.ok) {
-      alert("Failed to update stage");
-      return;
-    }
-    queryClient.invalidateQueries({ queryKey: ["stages", projectId] });
+    if (!res.ok) return alert("Failed to update stage");
+    queryClient.invalidateQueries({ queryKey: ["stages", board.id] });
   }
 
   async function renameStage(stage: Stage, newName: string) {
+    if (!board) return;
     if (newName === stage.name || !newName.trim()) return;
-    const res = await fetch(`/api/projects/${projectId}/stages/${stage.id}`, {
+    const res = await fetch(`/api/boards/${board.id}/stages/${stage.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: newName }),
     });
-    if (!res.ok) {
-      alert("Failed to rename stage");
-      return;
-    }
-    queryClient.invalidateQueries({ queryKey: ["stages", projectId] });
+    if (!res.ok) return alert("Failed to rename stage");
+    queryClient.invalidateQueries({ queryKey: ["stages", board.id] });
   }
 
-  // Render in draft order if dirty, otherwise server order
   const stageById: Record<string, Stage> = {};
   for (const s of stages) stageById[s.id] = s;
   const orderedStages = draftOrder.map(id => stageById[id]).filter(Boolean);
@@ -173,7 +187,7 @@ export default function BoardConfigPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Configure stages</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Stages are columns on the board. Transitions define which moves are allowed.
+            <span className="font-medium text-foreground">{board.name}</span> — stages are columns; transitions define which moves are allowed.
           </p>
         </div>
         {dirty && (

@@ -5,7 +5,7 @@ import {
   addTaskActivity,
   hasActiveTaskClaim,
   listTaskActivity,
-  listStagesForProject,
+  listStagesForBoard,
 } from "@/lib/db/queries";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -15,7 +15,7 @@ export const GET = withAuth(async (_req: NextRequest, _auth, ctx) => {
   const task = getTaskById(id);
   if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
   const activity = listTaskActivity(id);
-  const stages = listStagesForProject(task.project_id);
+  const stages = listStagesForBoard(task.board_id);
   const stageMap: Record<string, string> = {};
   for (const s of stages) stageMap[s.id] = s.name;
   return NextResponse.json(activity.map(a => ({

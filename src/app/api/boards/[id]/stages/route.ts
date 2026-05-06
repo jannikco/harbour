@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withAuth, withUserAuth } from "@/lib/auth";
 import {
-  getProjectById,
-  listStagesForProject,
+  getBoardById,
+  listStagesForBoard,
   createStage,
   reorderStages,
   setStageTransitions,
@@ -13,18 +13,17 @@ type RouteContext = { params: Promise<{ id: string }> };
 
 export const GET = withAuth(async (_req: NextRequest, _auth, ctx) => {
   const { id } = await (ctx as RouteContext).params;
-  const project = getProjectById(id);
-  if (!project) return NextResponse.json({ error: "project not found" }, { status: 404 });
-  const stages = listStagesForProject(id);
-  // Annotate with jobs-watching count so the UI can warn about hot stages
+  const board = getBoardById(id);
+  if (!board) return NextResponse.json({ error: "board not found" }, { status: 404 });
+  const stages = listStagesForBoard(id);
   const enriched = stages.map(s => ({ ...s, jobs_watching: countJobsWatching(s.id) }));
   return NextResponse.json(enriched);
 });
 
 export const POST = withUserAuth(async (req: NextRequest, _auth, ctx) => {
   const { id } = await (ctx as RouteContext).params;
-  const project = getProjectById(id);
-  if (!project) return NextResponse.json({ error: "project not found" }, { status: 404 });
+  const board = getBoardById(id);
+  if (!board) return NextResponse.json({ error: "board not found" }, { status: 404 });
 
   const body = await req.json() as { name?: string; is_terminal?: boolean };
   if (!body.name?.trim()) {
@@ -40,12 +39,11 @@ export const POST = withUserAuth(async (req: NextRequest, _auth, ctx) => {
  *   order: string[]                                       — ordered stage IDs
  *   transitions: { [fromStageId]: string[] }              — outgoing edges
  * }
- * Either field is optional; only the provided ones are applied.
  */
 export const PUT = withUserAuth(async (req: NextRequest, _auth, ctx) => {
   const { id } = await (ctx as RouteContext).params;
-  const project = getProjectById(id);
-  if (!project) return NextResponse.json({ error: "project not found" }, { status: 404 });
+  const board = getBoardById(id);
+  if (!board) return NextResponse.json({ error: "board not found" }, { status: 404 });
 
   const body = await req.json() as {
     order?: string[];
@@ -53,15 +51,13 @@ export const PUT = withUserAuth(async (req: NextRequest, _auth, ctx) => {
   };
 
   try {
-    if (body.order) {
-      reorderStages(id, body.order);
-    }
+    if (body.order) reorderStages(id, body.order);
     if (body.transitions) {
-      const stages = listStagesForProject(id);
+      const stages = listStagesForBoard(id);
       const validIds = new Set(stages.map(s => s.id));
       for (const [fromId, toIds] of Object.entries(body.transitions)) {
         if (!validIds.has(fromId)) {
-          return NextResponse.json({ error: `stage ${fromId} not in project` }, { status: 400 });
+          return NextResponse.json({ error: `stage ${fromId} not on board` }, { status: 400 });
         }
         setStageTransitions(fromId, toIds);
       }
@@ -70,6 +66,6 @@ export const PUT = withUserAuth(async (req: NextRequest, _auth, ctx) => {
     return NextResponse.json({ error: err.message ?? "update failed" }, { status: 400 });
   }
 
-  const stages = listStagesForProject(id).map(s => ({ ...s, jobs_watching: countJobsWatching(s.id) }));
+  const stages = listStagesForBoard(id).map(s => ({ ...s, jobs_watching: countJobsWatching(s.id) }));
   return NextResponse.json(stages);
 });

@@ -1,9 +1,9 @@
-import { getDb, seedDefaultBoardSql } from "./schema";
+import { getDb } from "./schema";
 import { v4 as uuid } from "uuid";
 
 export type Stage = {
   id: string;
-  project_id: string;
+  board_id: string;
   name: string;
   position: number;
   is_terminal: number;
@@ -13,16 +13,11 @@ export type Stage = {
 
 export type StageWithTransitions = Stage & { transitions_to: string[] };
 
-export function seedDefaultBoard(projectId: string) {
-  const db = getDb();
-  seedDefaultBoardSql(db, projectId);
-}
-
-export function listStagesForProject(projectId: string): StageWithTransitions[] {
+export function listStagesForBoard(boardId: string): StageWithTransitions[] {
   const db = getDb();
   const stages = db.prepare(
-    `SELECT * FROM project_stages WHERE project_id = ? ORDER BY position ASC`
-  ).all(projectId) as Stage[];
+    `SELECT * FROM stages WHERE board_id = ? ORDER BY position ASC`
+  ).all(boardId) as Stage[];
   if (stages.length === 0) return [];
   const stageIds = stages.map(s => s.id);
   const placeholders = stageIds.map(() => "?").join(",");
@@ -37,7 +32,7 @@ export function listStagesForProject(projectId: string): StageWithTransitions[] 
 
 export function getStageById(id: string): Stage | null {
   const db = getDb();
-  return (db.prepare(`SELECT * FROM project_stages WHERE id = ?`).get(id) as Stage) || null;
+  return (db.prepare(`SELECT * FROM stages WHERE id = ?`).get(id) as Stage) || null;
 }
 
 export function getLegalTransitions(stageId: string): string[] {
@@ -55,7 +50,7 @@ export function isTransitionLegal(fromStageId: string, toStageId: string): boole
   return !!row;
 }
 
-export function createStage(projectId: string, data: {
+export function createStage(boardId: string, data: {
   name: string;
   position?: number;
   is_terminal?: boolean;
@@ -65,13 +60,13 @@ export function createStage(projectId: string, data: {
   let position = data.position;
   if (position === undefined) {
     const max = db.prepare(
-      `SELECT COALESCE(MAX(position), -1) AS max FROM project_stages WHERE project_id = ?`
-    ).get(projectId) as { max: number };
+      `SELECT COALESCE(MAX(position), -1) AS max FROM stages WHERE board_id = ?`
+    ).get(boardId) as { max: number };
     position = max.max + 1;
   }
   db.prepare(
-    `INSERT INTO project_stages (id, project_id, name, position, is_terminal) VALUES (?, ?, ?, ?, ?)`
-  ).run(id, projectId, data.name, position, data.is_terminal ? 1 : 0);
+    `INSERT INTO stages (id, board_id, name, position, is_terminal) VALUES (?, ?, ?, ?, ?)`
+  ).run(id, boardId, data.name, position, data.is_terminal ? 1 : 0);
   return getStageById(id)!;
 }
 
@@ -89,7 +84,7 @@ export function updateStage(id: string, data: {
   if (fields.length === 0) return getStageById(id);
   fields.push("updated_at = unixepoch()");
   values.push(id);
-  db.prepare(`UPDATE project_stages SET ${fields.join(", ")} WHERE id = ?`).run(...values);
+  db.prepare(`UPDATE stages SET ${fields.join(", ")} WHERE id = ?`).run(...values);
   return getStageById(id);
 }
 
@@ -112,19 +107,19 @@ export function deleteStage(id: string): { ok: boolean; reason?: string } {
     return { ok: false, reason: `${watchingJobs.n} job(s) watch this stage. Reconfigure them before deleting.` };
   }
 
-  db.prepare(`DELETE FROM project_stages WHERE id = ?`).run(id);
+  db.prepare(`DELETE FROM stages WHERE id = ?`).run(id);
   return { ok: true };
 }
 
-/** Reorder all stages in a project to match the given id list. */
-export function reorderStages(projectId: string, stageIds: string[]) {
+/** Reorder all stages on a board to match the given id list. */
+export function reorderStages(boardId: string, stageIds: string[]) {
   const db = getDb();
-  const existing = db.prepare(`SELECT id FROM project_stages WHERE project_id = ?`).all(projectId) as { id: string }[];
+  const existing = db.prepare(`SELECT id FROM stages WHERE board_id = ?`).all(boardId) as { id: string }[];
   const existingSet = new Set(existing.map(e => e.id));
   if (stageIds.length !== existing.length || !stageIds.every(id => existingSet.has(id))) {
-    throw new Error("reorderStages must include exactly the stages belonging to the project");
+    throw new Error("reorderStages must include exactly the stages belonging to the board");
   }
-  const stmt = db.prepare(`UPDATE project_stages SET position = ?, updated_at = unixepoch() WHERE id = ?`);
+  const stmt = db.prepare(`UPDATE stages SET position = ?, updated_at = unixepoch() WHERE id = ?`);
   db.transaction(() => {
     for (let i = 0; i < stageIds.length; i++) stmt.run(i, stageIds[i]);
   })();
@@ -136,11 +131,11 @@ export function setStageTransitions(stageId: string, toStageIds: string[]) {
   const stage = getStageById(stageId);
   if (!stage) throw new Error("stage not found");
   const validTargets = db.prepare(
-    `SELECT id FROM project_stages WHERE project_id = ?`
-  ).all(stage.project_id) as { id: string }[];
+    `SELECT id FROM stages WHERE board_id = ?`
+  ).all(stage.board_id) as { id: string }[];
   const validSet = new Set(validTargets.map(t => t.id));
   for (const t of toStageIds) {
-    if (!validSet.has(t)) throw new Error(`target stage ${t} is not in the same project`);
+    if (!validSet.has(t)) throw new Error(`target stage ${t} is not on the same board`);
     if (t === stageId) throw new Error("a stage cannot transition to itself");
   }
   db.transaction(() => {
@@ -150,7 +145,7 @@ export function setStageTransitions(stageId: string, toStageIds: string[]) {
   })();
 }
 
-/** Number of jobs watching this stage as their trigger. Used in board config UI to surface concurrency. */
+/** Number of jobs watching this stage as their trigger. */
 export function countJobsWatching(stageId: string): number {
   const db = getDb();
   const row = db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE watched_stage_id = ?`).get(stageId) as { n: number };

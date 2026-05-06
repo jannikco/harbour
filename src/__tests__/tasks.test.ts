@@ -4,7 +4,13 @@ import { setDb, resetDb, initializeSchema, getDb } from "@/lib/db/schema";
 import {
   createProject,
   getProjectById,
-  listStagesForProject,
+  listBoards,
+  getBoardById,
+  getBoardForProject,
+  getTopLevelBoard,
+  createBoard,
+  resolveActiveBoard,
+  listStagesForBoard,
   getStageById,
   isTransitionLegal,
   createStage,
@@ -15,7 +21,7 @@ import {
   countJobsWatching,
   createTask,
   getTaskById,
-  listTasksByProject,
+  listTasksByBoard,
   listTasksByStage,
   moveTaskToStage,
   archiveTask,
@@ -50,35 +56,77 @@ afterEach(() => {
   resetDb();
 });
 
-describe("Default board seeding", () => {
-  it("creates four stages on a new project with the expected transitions", () => {
+describe("Default top-level board", () => {
+  it("a top-level board exists after init even without any project", () => {
+    const top = getTopLevelBoard();
+    expect(top).not.toBeNull();
+    expect(top!.project_id).toBeNull();
+    const stages = listStagesForBoard(top!.id);
+    expect(stages.map(s => s.name)).toEqual(["To Do", "Doing", "Review", "Done"]);
+  });
+
+  it("listBoards returns top-level board first, then project-linked ones", () => {
     const project = createProject("Demo")!;
-    const stages = listStagesForProject(project.id);
+    const boards = listBoards();
+    expect(boards.length).toBe(2);
+    expect(boards[0].project_id).toBeNull();
+    expect(boards[1].project_id).toBe(project.id);
+  });
+});
+
+describe("Project board auto-creation", () => {
+  it("creates a board with default stages when a project is created", () => {
+    const project = createProject("Demo")!;
+    const board = getBoardForProject(project.id);
+    expect(board).not.toBeNull();
+    const stages = listStagesForBoard(board!.id);
     expect(stages.map(s => s.name)).toEqual(["To Do", "Doing", "Review", "Done"]);
     const done = stages.find(s => s.name === "Done")!;
     expect(done.is_terminal).toBe(1);
+  });
 
+  it("default transitions are wired up correctly", () => {
+    const project = createProject("Demo")!;
+    const board = getBoardForProject(project.id)!;
+    const stages = listStagesForBoard(board.id);
     const todo = stages.find(s => s.name === "To Do")!;
     const doing = stages.find(s => s.name === "Doing")!;
     const review = stages.find(s => s.name === "Review")!;
+    const done = stages.find(s => s.name === "Done")!;
 
     expect(isTransitionLegal(todo.id, doing.id)).toBe(true);
     expect(isTransitionLegal(doing.id, review.id)).toBe(true);
     expect(isTransitionLegal(review.id, done.id)).toBe(true);
-    // Kick-back paths
     expect(isTransitionLegal(review.id, todo.id)).toBe(true);
     expect(isTransitionLegal(doing.id, todo.id)).toBe(true);
-    // Skipping a stage is not allowed by default
     expect(isTransitionLegal(todo.id, review.id)).toBe(false);
+  });
+});
+
+describe("resolveActiveBoard", () => {
+  it("returns the project's board when one is active", () => {
+    const project = createProject("Demo")!;
+    const board = resolveActiveBoard(project.id);
+    expect(board).not.toBeNull();
+    expect(board!.project_id).toBe(project.id);
+  });
+
+  it("returns the top-level board when no project is active", () => {
+    createProject("Demo");
+    const board = resolveActiveBoard(null);
+    expect(board).not.toBeNull();
+    expect(board!.project_id).toBeNull();
   });
 });
 
 describe("Task lifecycle", () => {
   function setup() {
     const project = createProject("Demo")!;
-    const stages = listStagesForProject(project.id);
+    const board = getBoardForProject(project.id)!;
+    const stages = listStagesForBoard(board.id);
     return {
       project,
+      board,
       todo: stages.find(s => s.name === "To Do")!,
       doing: stages.find(s => s.name === "Doing")!,
       review: stages.find(s => s.name === "Review")!,
@@ -87,9 +135,9 @@ describe("Task lifecycle", () => {
   }
 
   it("creates a task with a 'created' activity entry", () => {
-    const { project, todo } = setup();
+    const { board, todo } = setup();
     const task = createTask({
-      projectId: project.id,
+      boardId: board.id,
       stageId: todo.id,
       title: "Write blog post",
       description: "About the new feature",
@@ -104,16 +152,16 @@ describe("Task lifecycle", () => {
   });
 
   it("moveTaskToStage rejects illegal transitions", () => {
-    const { project, todo, review } = setup();
-    const task = createTask({ projectId: project.id, stageId: todo.id, title: "Card" });
+    const { board, todo, review } = setup();
+    const task = createTask({ boardId: board.id, stageId: todo.id, title: "Card" });
     const result = moveTaskToStage(task.id, review.id, { authorType: "user", authorName: "Tester" });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toMatch(/not allowed/);
   });
 
   it("moveTaskToStage allows legal transitions and logs them", () => {
-    const { project, todo, doing } = setup();
-    const task = createTask({ projectId: project.id, stageId: todo.id, title: "Card" });
+    const { board, todo, doing } = setup();
+    const task = createTask({ boardId: board.id, stageId: todo.id, title: "Card" });
     const result = moveTaskToStage(task.id, doing.id, { authorType: "user", authorName: "Tester" });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -126,17 +174,17 @@ describe("Task lifecycle", () => {
   });
 
   it("listTasksByStage returns tasks ordered by position", () => {
-    const { project, todo } = setup();
-    const a = createTask({ projectId: project.id, stageId: todo.id, title: "First" });
-    const b = createTask({ projectId: project.id, stageId: todo.id, title: "Second" });
-    const c = createTask({ projectId: project.id, stageId: todo.id, title: "Third (top)", insertAt: "top" });
+    const { board, todo } = setup();
+    createTask({ boardId: board.id, stageId: todo.id, title: "First" });
+    createTask({ boardId: board.id, stageId: todo.id, title: "Second" });
+    createTask({ boardId: board.id, stageId: todo.id, title: "Third (top)", insertAt: "top" });
     const list = listTasksByStage(todo.id);
     expect(list.map(t => t.title)).toEqual(["Third (top)", "First", "Second"]);
   });
 
   it("archiveTask removes a task from the active list", () => {
-    const { project, todo } = setup();
-    const task = createTask({ projectId: project.id, stageId: todo.id, title: "Card" });
+    const { board, todo } = setup();
+    const task = createTask({ boardId: board.id, stageId: todo.id, title: "Card" });
     archiveTask(task.id);
     expect(listTasksByStage(todo.id)).toHaveLength(0);
   });
@@ -145,11 +193,11 @@ describe("Task lifecycle", () => {
 describe("Claim atomicity (CAS race)", () => {
   it("only one of two competing claims wins", () => {
     const project = createProject("Demo")!;
-    const stages = listStagesForProject(project.id);
+    const board = getBoardForProject(project.id)!;
+    const stages = listStagesForBoard(board.id);
     const todo = stages.find(s => s.name === "To Do")!;
-    const task = createTask({ projectId: project.id, stageId: todo.id, title: "Card" });
+    const task = createTask({ boardId: board.id, stageId: todo.id, title: "Card" });
 
-    // Two real runs to satisfy the FK from tasks.claimed_by_run_id → runs.id
     const agent = createAgent("worker", "");
     const job = createJob(agent.id, { name: "J", schedule: "{}", triggerKind: "task_stage", watchedStageId: todo.id });
     const db = getDb();
@@ -172,17 +220,19 @@ describe("Claim atomicity (CAS race)", () => {
 describe("Stage CRUD", () => {
   it("createStage appends to the end with auto position", () => {
     const project = createProject("Demo")!;
-    const stage = createStage(project.id, { name: "QA" });
-    const stages = listStagesForProject(project.id);
+    const board = getBoardForProject(project.id)!;
+    const stage = createStage(board.id, { name: "QA" });
+    const stages = listStagesForBoard(board.id);
     expect(stages.map(s => s.name)).toEqual(["To Do", "Doing", "Review", "Done", "QA"]);
     expect(stage.position).toBe(4);
   });
 
   it("deleteStage refuses when active tasks are in it", () => {
     const project = createProject("Demo")!;
-    const stages = listStagesForProject(project.id);
+    const board = getBoardForProject(project.id)!;
+    const stages = listStagesForBoard(board.id);
     const todo = stages.find(s => s.name === "To Do")!;
-    createTask({ projectId: project.id, stageId: todo.id, title: "Card" });
+    createTask({ boardId: board.id, stageId: todo.id, title: "Card" });
     const result = deleteStage(todo.id);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toMatch(/active task/);
@@ -190,7 +240,8 @@ describe("Stage CRUD", () => {
 
   it("deleteStage refuses when a job watches it", () => {
     const project = createProject("Demo")!;
-    const stages = listStagesForProject(project.id);
+    const board = getBoardForProject(project.id)!;
+    const stages = listStagesForBoard(board.id);
     const review = stages.find(s => s.name === "Review")!;
     const agent = createAgent("rev", "");
     createJob(agent.id, {
@@ -207,7 +258,8 @@ describe("Stage CRUD", () => {
 
   it("setStageTransitions replaces the outgoing edges atomically", () => {
     const project = createProject("Demo")!;
-    const stages = listStagesForProject(project.id);
+    const board = getBoardForProject(project.id)!;
+    const stages = listStagesForBoard(board.id);
     const todo = stages.find(s => s.name === "To Do")!;
     const review = stages.find(s => s.name === "Review")!;
     const done = stages.find(s => s.name === "Done")!;
@@ -215,7 +267,6 @@ describe("Stage CRUD", () => {
     setStageTransitions(todo.id, [review.id, done.id]);
     expect(isTransitionLegal(todo.id, review.id)).toBe(true);
     expect(isTransitionLegal(todo.id, done.id)).toBe(true);
-    // Old edge gone
     expect(isTransitionLegal(todo.id, stages.find(s => s.name === "Doing")!.id)).toBe(false);
   });
 });
@@ -223,11 +274,12 @@ describe("Stage CRUD", () => {
 describe("Task-triggered job picks up tasks via getAgentNextRun", () => {
   it("picks a task from the watched stage and binds it to the run", () => {
     const project = createProject("Demo")!;
-    const stages = listStagesForProject(project.id);
+    const board = getBoardForProject(project.id)!;
+    const stages = listStagesForBoard(board.id);
     const todo = stages.find(s => s.name === "To Do")!;
 
     const agent = createAgent("writer", "");
-    const job = createJob(agent.id, {
+    createJob(agent.id, {
       name: "Writer",
       schedule: "{}",
       triggerKind: "task_stage",
@@ -235,7 +287,7 @@ describe("Task-triggered job picks up tasks via getAgentNextRun", () => {
       instructions: "Write copy.",
     });
 
-    const task = createTask({ projectId: project.id, stageId: todo.id, title: "Write something" });
+    const task = createTask({ boardId: board.id, stageId: todo.id, title: "Write something" });
 
     const payload = getAgentNextRun(agent.id);
     expect(payload).not.toBeNull();
@@ -245,7 +297,6 @@ describe("Task-triggered job picks up tasks via getAgentNextRun", () => {
     expect(payload!.task.title).toBe("Write something");
     expect(payload!.task.legal_transitions.map((t: any) => t.name)).toContain("Doing");
 
-    // The task should be claimed; a second poll returns nothing for this agent
     expect(hasActiveTaskClaim(agent.id, task.id)).toBe(true);
     const secondPayload = getAgentNextRun(agent.id);
     expect(secondPayload).toBeNull();
@@ -253,7 +304,8 @@ describe("Task-triggered job picks up tasks via getAgentNextRun", () => {
 
   it("'done' is rejected if the task hasn't been moved", () => {
     const project = createProject("Demo")!;
-    const stages = listStagesForProject(project.id);
+    const board = getBoardForProject(project.id)!;
+    const stages = listStagesForBoard(board.id);
     const todo = stages.find(s => s.name === "To Do")!;
 
     const agent = createAgent("writer", "");
@@ -263,16 +315,14 @@ describe("Task-triggered job picks up tasks via getAgentNextRun", () => {
       triggerKind: "task_stage",
       watchedStageId: todo.id,
     });
-    createTask({ projectId: project.id, stageId: todo.id, title: "Card" });
+    createTask({ boardId: board.id, stageId: todo.id, title: "Card" });
 
     const payload = getAgentNextRun(agent.id);
     const runId = payload!.run.id;
 
-    // Simulate agent setting done without moving the card → should be rejected
     const error = validateRunStatusTransition(runId, "done");
     expect(error).toMatch(/Task is still in the watched stage/);
 
-    // After moving the task to a legal next stage, 'done' is allowed
     const doing = stages.find(s => s.name === "Doing")!;
     const move = moveTaskToStage(payload!.run.task_id!, doing.id, {
       authorType: "agent",
@@ -286,7 +336,8 @@ describe("Task-triggered job picks up tasks via getAgentNextRun", () => {
 
   it("failed/skipped runs release the task claim", () => {
     const project = createProject("Demo")!;
-    const stages = listStagesForProject(project.id);
+    const board = getBoardForProject(project.id)!;
+    const stages = listStagesForBoard(board.id);
     const todo = stages.find(s => s.name === "To Do")!;
 
     const agent = createAgent("writer", "");
@@ -296,15 +347,25 @@ describe("Task-triggered job picks up tasks via getAgentNextRun", () => {
       triggerKind: "task_stage",
       watchedStageId: todo.id,
     });
-    const task = createTask({ projectId: project.id, stageId: todo.id, title: "Card" });
+    const task = createTask({ boardId: board.id, stageId: todo.id, title: "Card" });
 
     const payload = getAgentNextRun(agent.id);
     const runId = payload!.run.id;
 
     updateRunStatus(runId, "failed");
-    // Task should now be unclaimed and re-pickable
     const next = getAgentNextRun(agent.id);
     expect(next).not.toBeNull();
     expect(next!.run.task_id).toBe(task.id);
+  });
+});
+
+describe("Top-level (project-less) board flow", () => {
+  it("can create tasks on the top-level board without any project", () => {
+    const top = getTopLevelBoard()!;
+    const stages = listStagesForBoard(top.id);
+    const todo = stages.find(s => s.name === "To Do")!;
+    const task = createTask({ boardId: top.id, stageId: todo.id, title: "Solo task" });
+    expect(task.board_id).toBe(top.id);
+    expect(listTasksByBoard(top.id)).toHaveLength(1);
   });
 });

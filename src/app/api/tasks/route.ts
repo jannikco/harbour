@@ -2,37 +2,37 @@ import { NextRequest, NextResponse } from "next/server";
 import { withAuth } from "@/lib/auth";
 import {
   createTask,
-  getProjectById,
+  getBoardById,
   getStageById,
-  listTasksByProject,
+  listTasksByBoard,
 } from "@/lib/db/queries";
 
 export const GET = withAuth(async (req: NextRequest) => {
-  const projectId = req.nextUrl.searchParams.get("projectId");
-  if (!projectId) {
-    return NextResponse.json({ error: "projectId is required" }, { status: 400 });
+  const boardId = req.nextUrl.searchParams.get("boardId");
+  if (!boardId) {
+    return NextResponse.json({ error: "boardId is required" }, { status: 400 });
   }
-  const project = getProjectById(projectId);
-  if (!project) return NextResponse.json({ error: "project not found" }, { status: 404 });
-  return NextResponse.json(listTasksByProject(projectId));
+  const board = getBoardById(boardId);
+  if (!board) return NextResponse.json({ error: "board not found" }, { status: 404 });
+  return NextResponse.json(listTasksByBoard(boardId));
 });
 
 export const POST = withAuth(async (req: NextRequest, auth) => {
   const body = await req.json() as {
-    projectId?: string;
+    boardId?: string;
     stageId?: string;
     title?: string;
     description?: string;
     insertAt?: "top" | "bottom";
   };
-  if (!body.projectId || !body.stageId || !body.title?.trim()) {
-    return NextResponse.json({ error: "projectId, stageId, and title are required" }, { status: 400 });
+  if (!body.boardId || !body.stageId || !body.title?.trim()) {
+    return NextResponse.json({ error: "boardId, stageId, and title are required" }, { status: 400 });
   }
-  const project = getProjectById(body.projectId);
-  if (!project) return NextResponse.json({ error: "project not found" }, { status: 404 });
+  const board = getBoardById(body.boardId);
+  if (!board) return NextResponse.json({ error: "board not found" }, { status: 404 });
   const stage = getStageById(body.stageId);
-  if (!stage || stage.project_id !== body.projectId) {
-    return NextResponse.json({ error: "stage not found in this project" }, { status: 404 });
+  if (!stage || stage.board_id !== body.boardId) {
+    return NextResponse.json({ error: "stage not found on this board" }, { status: 404 });
   }
 
   const authorType = auth.type === "user" ? "user" : "agent";
@@ -40,7 +40,7 @@ export const POST = withAuth(async (req: NextRequest, auth) => {
   const authorName = auth.type === "user" ? auth.displayName : auth.agentName;
 
   const task = createTask({
-    projectId: body.projectId,
+    boardId: body.boardId,
     stageId: body.stageId,
     title: body.title,
     description: body.description ?? null,
