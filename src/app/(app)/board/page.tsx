@@ -363,7 +363,7 @@ function BoardView({ board, onChange }: { board: { id: string; name: string; pro
       </div>
 
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        <div className="flex gap-3 overflow-x-auto pb-4">
+        <div className="flex gap-3 overflow-x-auto pb-2 [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
           {data.stages.map(stage => (
             <StageColumn
               key={stage.id}
