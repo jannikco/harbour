@@ -200,36 +200,26 @@ export default function TaskDetailPage({ params }: { params: Promise<{ taskId: s
         )}
       </div>
 
-      <div className="space-y-3">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          Attachments
-          {attachments.length > 0 && (
-            <span className="ml-1.5 text-muted-foreground/70">({attachments.length})</span>
-          )}
-        </h2>
-        {attachments.length > 0 && (
-          <div className="grid gap-2 sm:grid-cols-2">
-            {attachments.map(att => (
-              <div key={att.id} className="group relative">
-                <AttachmentList items={[att]} />
-                <button
-                  type="button"
-                  onClick={() => deleteAttachment(att)}
-                  className="absolute top-1 right-1 rounded p-1 bg-background/80 backdrop-blur opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-all"
-                  title="Delete attachment"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        <AttachmentComposer
-          ref={composerRef}
-          parent={{ type: "task", id: taskId }}
-          onStagedIdsChange={() => queryClient.invalidateQueries({ queryKey: ["task-attachments", taskId] })}
-        />
-      </div>
+      {/* Existing attachments rendered inline near the description so they're
+          visible at a glance. The composer that *adds* new attachments lives
+          inside the comment form below — same pattern as the run page. */}
+      {attachments.length > 0 && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {attachments.map(att => (
+            <div key={att.id} className="group relative">
+              <AttachmentList items={[att]} />
+              <button
+                type="button"
+                onClick={() => deleteAttachment(att)}
+                className="absolute top-1 right-1 rounded p-1 bg-background/80 backdrop-blur opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-all"
+                title="Delete attachment"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="space-y-3">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
@@ -250,8 +240,13 @@ export default function TaskDetailPage({ params }: { params: Promise<{ taskId: s
         <Textarea
           value={comment}
           onChange={e => setComment(e.target.value)}
-          placeholder="Add a comment..."
+          placeholder="Add a comment, or paste/drag files & embed URLs..."
           rows={3}
+        />
+        <AttachmentComposer
+          ref={composerRef}
+          parent={{ type: "task", id: taskId }}
+          onStagedIdsChange={() => queryClient.invalidateQueries({ queryKey: ["task-attachments", taskId] })}
         />
         <div className="flex justify-end">
           <Button type="submit" size="sm" disabled={posting || !comment.trim()}>
