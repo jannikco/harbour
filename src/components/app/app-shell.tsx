@@ -51,7 +51,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   // Fetch projects
-  const { data: projects = [] } = useQuery<Project[]>({
+  const { data: projects = [], isFetched: projectsFetched } = useQuery<Project[]>({
     queryKey: ["projects"],
     queryFn: async () => {
       const res = await fetch("/api/projects");
@@ -62,12 +62,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     enabled: !!user,
   });
 
-  // If stored project no longer exists, clear it
+  // If stored project no longer exists, clear it. We gate on `projectsFetched`
+  // (not `projects.length > 0`) so stale state is also cleared on fresh
+  // installs where the project list is genuinely empty.
   useEffect(() => {
-    if (projectStateLoaded && activeProjectId && projects.length > 0 && !projects.some(p => p.id === activeProjectId)) {
+    if (projectStateLoaded && projectsFetched && activeProjectId && !projects.some(p => p.id === activeProjectId)) {
       setActiveProjectId(null);
     }
-  }, [projects, activeProjectId, projectStateLoaded]);
+  }, [projects, activeProjectId, projectStateLoaded, projectsFetched]);
 
   // Solo install convenience: when there's exactly one project and the user
   // hasn't picked one (no localStorage entry), make it the active project.

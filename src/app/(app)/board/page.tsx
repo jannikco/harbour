@@ -88,7 +88,10 @@ export default function BoardPage() {
       return boards.find(b => b.id === explicitBoardId) ?? null;
     }
     if (projectId) {
-      return boards.find(b => b.project_id === projectId) ?? null;
+      const match = boards.find(b => b.project_id === projectId);
+      if (match) return match;
+      // Stale activeProjectId (e.g. project deleted while the cleanup hook
+      // races) — fall through to the default resolution rules.
     }
     if (boards.length === 1) return boards[0];
     return null;
