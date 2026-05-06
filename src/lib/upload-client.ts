@@ -1,6 +1,9 @@
 /**
  * Browser-side upload helper. Uses XMLHttpRequest so we can report
  * progress — the Fetch API does not expose upload progress events.
+ *
+ * Polymorphic over the attachment parent (run or task) — the URL is built
+ * from the parent shape so both kinds share the same wire protocol.
  */
 
 import type { SerializedAttachment } from "./attachments-serialize";
@@ -12,13 +15,21 @@ export type UploadHandle = {
   abort: () => void;
 };
 
-export function uploadFileToRun(runId: string, file: File, onProgress?: UploadProgress): UploadHandle {
+export type UploadParent = { type: "run" | "task"; id: string };
+
+function attachmentsUrlFor(parent: UploadParent): string {
+  return parent.type === "run"
+    ? `/api/runs/${parent.id}/attachments`
+    : `/api/tasks/${parent.id}/attachments`;
+}
+
+export function uploadFile(parent: UploadParent, file: File, onProgress?: UploadProgress): UploadHandle {
   const xhr = new XMLHttpRequest();
   const form = new FormData();
   form.append("file", file);
 
   const promise = new Promise<SerializedAttachment>((resolve, reject) => {
-    xhr.open("POST", `/api/runs/${runId}/attachments`, true);
+    xhr.open("POST", attachmentsUrlFor(parent), true);
 
     xhr.upload.onprogress = e => {
       if (e.lengthComputable && onProgress) {
@@ -50,8 +61,13 @@ export function uploadFileToRun(runId: string, file: File, onProgress?: UploadPr
   return { promise, abort: () => xhr.abort() };
 }
 
-export async function createEmbedAttachment(runId: string, url: string, title?: string): Promise<SerializedAttachment> {
-  const res = await fetch(`/api/runs/${runId}/attachments`, {
+/** Backward-compat shim: code still using uploadFileToRun continues to work. */
+export function uploadFileToRun(runId: string, file: File, onProgress?: UploadProgress): UploadHandle {
+  return uploadFile({ type: "run", id: runId }, file, onProgress);
+}
+
+export async function createEmbedAttachment(parent: UploadParent, url: string, title?: string): Promise<SerializedAttachment> {
+  const res = await fetch(attachmentsUrlFor(parent), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, title }),
@@ -63,8 +79,11 @@ export async function createEmbedAttachment(runId: string, url: string, title?: 
   return res.json();
 }
 
-export async function deleteAttachment(runId: string, attachmentId: string): Promise<void> {
-  await fetch(`/api/runs/${runId}/attachments/${attachmentId}`, { method: "DELETE" });
+export async function deleteAttachment(parent: UploadParent, attachmentId: string): Promise<void> {
+  const url = parent.type === "run"
+    ? `/api/runs/${parent.id}/attachments/${attachmentId}`
+    : `/api/tasks/${parent.id}/attachments/${attachmentId}`;
+  await fetch(url, { method: "DELETE" });
 }
 
 /** Match URLs we support embedding. Must stay in sync with server-side detectEmbedProvider. */

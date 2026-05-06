@@ -5,7 +5,7 @@ import { pipeline } from "stream/promises";
 import Busboy from "busboy";
 import { v4 as uuid } from "uuid";
 import { NextRequest } from "next/server";
-import { ensureDir, maxUploadBytes, runUploadsDir, uploadsDir } from "./paths";
+import { ensureDir, maxUploadBytes, parentUploadsDir, uploadsDir } from "./paths";
 
 /**
  * Sanitize an uploaded filename. Keep the extension, strip path separators,
@@ -30,8 +30,10 @@ export type StagedUpload = {
   storagePath: string;   // relative to uploadsDir()
 };
 
+export type UploadParent = { type: "run" | "task"; id: string };
+
 /**
- * Stream a multipart/form-data request into per-run upload directory.
+ * Stream a multipart/form-data request into the parent's upload directory.
  *
  * Writes each file to a temp path first, then atomically renames into
  * place. On any error (size cap, stream fault), cleans up all temp files
@@ -43,7 +45,7 @@ export type StagedUpload = {
  */
 export async function receiveMultipartUploads(
   req: NextRequest,
-  runId: string,
+  parent: UploadParent,
 ): Promise<{ files: StagedUpload[]; fields: Record<string, string> }> {
   const contentType = req.headers.get("content-type") || "";
   if (!contentType.toLowerCase().includes("multipart/form-data")) {
@@ -53,7 +55,7 @@ export async function receiveMultipartUploads(
     throw new UploadError("Empty request body", 400);
   }
 
-  const destDir = runUploadsDir(runId);
+  const destDir = parentUploadsDir(parent.type, parent.id);
   ensureDir(destDir);
   const limit = maxUploadBytes();
 

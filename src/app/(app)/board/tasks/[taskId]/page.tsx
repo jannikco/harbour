@@ -1,13 +1,16 @@
 "use client";
 
-import { useState, use } from "react";
+import { useState, useRef, use } from "react";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { BackLink } from "@/components/app/back-link";
-import { ArrowRight, Bot, Loader2, MessageSquare, User as UserIcon, Cpu, ChevronRight } from "lucide-react";
+import { AttachmentComposer, type AttachmentComposerHandle } from "@/components/app/attachment-composer";
+import { AttachmentList } from "@/components/app/attachment-display";
+import type { SerializedAttachment } from "@/lib/attachments-serialize";
+import { ArrowRight, Bot, Loader2, MessageSquare, User as UserIcon, Cpu, ChevronRight, Trash2 } from "lucide-react";
 import { timeAgo } from "@/lib/time";
 import {
   DropdownMenu,
@@ -85,9 +88,27 @@ export default function TaskDetailPage({ params }: { params: Promise<{ taskId: s
 
   const [comment, setComment] = useState("");
   const [posting, setPosting] = useState(false);
+  const composerRef = useRef<AttachmentComposerHandle>(null);
+
+  const { data: attachments = [] } = useQuery<SerializedAttachment[]>({
+    queryKey: ["task-attachments", taskId],
+    queryFn: async () => {
+      const res = await fetch(`/api/tasks/${taskId}/attachments`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    refetchInterval: 5000,
+  });
 
   if (isLoading) return <div className="text-sm text-muted-foreground py-12 text-center">Loading...</div>;
   if (!task) return <div className="text-sm text-muted-foreground py-12 text-center">Task not found.</div>;
+
+  async function deleteAttachment(att: SerializedAttachment) {
+    if (!confirm(`Delete ${att.filename || att.title || "attachment"}?`)) return;
+    const res = await fetch(`/api/tasks/${taskId}/attachments/${att.id}`, { method: "DELETE" });
+    if (!res.ok) return alert("Delete failed");
+    queryClient.invalidateQueries({ queryKey: ["task-attachments", taskId] });
+  }
 
   const stageById: Record<string, StageWithTransitions> = {};
   for (const s of stages) stageById[s.id] = s;
@@ -177,6 +198,37 @@ export default function TaskDetailPage({ params }: { params: Promise<{ taskId: s
         {claimed && (
           <span className="text-xs text-muted-foreground">Locked while an agent works</span>
         )}
+      </div>
+
+      <div className="space-y-3">
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          Attachments
+          {attachments.length > 0 && (
+            <span className="ml-1.5 text-muted-foreground/70">({attachments.length})</span>
+          )}
+        </h2>
+        {attachments.length > 0 && (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {attachments.map(att => (
+              <div key={att.id} className="group relative">
+                <AttachmentList items={[att]} />
+                <button
+                  type="button"
+                  onClick={() => deleteAttachment(att)}
+                  className="absolute top-1 right-1 rounded p-1 bg-background/80 backdrop-blur opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-all"
+                  title="Delete attachment"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <AttachmentComposer
+          ref={composerRef}
+          parent={{ type: "task", id: taskId }}
+          onStagedIdsChange={() => queryClient.invalidateQueries({ queryKey: ["task-attachments", taskId] })}
+        />
       </div>
 
       <div className="space-y-3">

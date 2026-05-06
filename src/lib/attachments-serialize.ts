@@ -1,12 +1,17 @@
-import { RunAttachment } from "./db/attachments";
+import { Attachment } from "./db/attachments";
 
 /**
- * Serialize a RunAttachment for the wire. Hides on-disk storage_path,
- * adds an absolute download URL for file kind, exposes embed metadata as-is.
+ * Serialize an Attachment for the wire. Hides on-disk storage_path,
+ * adds an absolute download URL (for file kind) keyed off the parent type,
+ * and exposes the parent identity so clients can render it consistently.
  */
 export type SerializedAttachment = {
   id: string;
-  run_id: string;
+  parent_type: "run" | "task";
+  parent_id: string;
+  /** @deprecated prefer parent_type/parent_id; kept for back-compat with run consumers. */
+  run_id: string | null;
+  task_id: string | null;
   activity_id: string | null;
   kind: "file" | "embed";
   filename: string | null;
@@ -20,13 +25,18 @@ export type SerializedAttachment = {
   created_at: number;
 };
 
-export function serializeAttachment(att: RunAttachment, baseUrl: string): SerializedAttachment {
+export function serializeAttachment(att: Attachment, baseUrl: string): SerializedAttachment {
+  const parent_type: "run" | "task" = att.run_id ? "run" : "task";
+  const parent_id = (att.run_id || att.task_id)!;
   const url = att.kind === "file"
-    ? `${baseUrl}/api/runs/${att.run_id}/attachments/${att.id}/file`
+    ? `${baseUrl}/api/${parent_type === "run" ? "runs" : "tasks"}/${parent_id}/attachments/${att.id}/file`
     : att.url;
   return {
     id: att.id,
+    parent_type,
+    parent_id,
     run_id: att.run_id,
+    task_id: att.task_id,
     activity_id: att.activity_id,
     kind: att.kind,
     filename: att.filename,

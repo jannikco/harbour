@@ -695,7 +695,7 @@ export default function RunDetailPage() {
               }
             }}
           />
-          <AttachmentComposer ref={composerRef} runId={id} />
+          <AttachmentComposer ref={composerRef} parent={{ type: "run", id }} />
           <div className="flex justify-end">
             <Button type="submit" size="sm" disabled={sending}>
               <Send className="h-3.5 w-3.5 mr-1.5" /> Send

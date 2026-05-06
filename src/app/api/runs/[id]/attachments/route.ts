@@ -6,7 +6,7 @@ import {
   createFileAttachment,
   createEmbedAttachment,
   detectEmbedProvider,
-  RunAttachment,
+  Attachment,
   Uploader,
 } from "@/lib/db/queries";
 import { receiveMultipartUploads, UploadError } from "@/lib/upload";
@@ -56,15 +56,15 @@ export const POST = withAuth(async (req, auth, { params }) => {
     if (!detectEmbedProvider(body.url)) {
       return NextResponse.json({ error: "Invalid embed URL" }, { status: 400 });
     }
-    const att = createEmbedAttachment({ runId: id, url: body.url, title: body.title ?? null, uploader });
+    const att = createEmbedAttachment({ parent: { type: "run", id }, url: body.url, title: body.title ?? null, uploader });
     return NextResponse.json(serializeAttachment(att, base), { status: 201 });
   }
 
   // File upload — multipart/form-data
   try {
-    const { files } = await receiveMultipartUploads(req, id);
-    const created: RunAttachment[] = files.map(f => createFileAttachment({
-      runId: id,
+    const { files } = await receiveMultipartUploads(req, { type: "run", id });
+    const created: Attachment[] = files.map(f => createFileAttachment({
+      parent: { type: "run", id },
       filename: f.filename,
       storagePath: f.storagePath,
       mimeType: f.mimeType,

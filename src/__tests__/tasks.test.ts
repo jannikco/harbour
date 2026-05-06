@@ -37,6 +37,9 @@ import {
   updateRunStatus,
   validateRunStatusTransition,
   getRunById,
+  createFileAttachment,
+  listAttachmentsByTask,
+  listAttachmentsByRun,
 } from "@/lib/db/queries";
 
 function freshDb(): Database.Database {
@@ -367,5 +370,56 @@ describe("Top-level (project-less) board flow", () => {
     const task = createTask({ boardId: top.id, stageId: todo.id, title: "Solo task" });
     expect(task.board_id).toBe(top.id);
     expect(listTasksByBoard(top.id)).toHaveLength(1);
+  });
+});
+
+describe("Polymorphic attachments", () => {
+  it("file attachment to a task lands in the right scope", () => {
+    const top = getTopLevelBoard()!;
+    const stages = listStagesForBoard(top.id);
+    const todo = stages.find(s => s.name === "To Do")!;
+    const task = createTask({ boardId: top.id, stageId: todo.id, title: "Has files" });
+
+    const att = createFileAttachment({
+      parent: { type: "task", id: task.id },
+      filename: "spec.pdf",
+      storagePath: "tasks/x/spec.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 1024,
+      uploader: { type: "user", id: "u1", name: "Tester" },
+    });
+    expect(att.task_id).toBe(task.id);
+    expect(att.run_id).toBeNull();
+    expect(listAttachmentsByTask(task.id)).toHaveLength(1);
+    expect(listAttachmentsByRun(task.id)).toHaveLength(0);
+  });
+
+  it("CHECK constraint rejects setting both parents on a single row", () => {
+    const top = getTopLevelBoard()!;
+    const stages = listStagesForBoard(top.id);
+    const todo = stages.find(s => s.name === "To Do")!;
+    const task = createTask({ boardId: top.id, stageId: todo.id, title: "Card" });
+
+    const agent = createAgent("a", "");
+    const job = createJob(agent.id, { name: "j", schedule: "{}", triggerKind: "task_stage", watchedStageId: todo.id });
+    const db = getDb();
+    db.prepare(`INSERT INTO runs (id, job_id, agent_id, status) VALUES ('r1', ?, ?, 'running')`).run(job!.id, agent.id);
+
+    expect(() => {
+      db.prepare(`
+        INSERT INTO attachments (id, run_id, task_id, kind, filename, storage_path, mime_type, size_bytes, uploaded_by_type, uploaded_by_id, uploaded_by_name)
+        VALUES ('a1', 'r1', ?, 'file', 'a.txt', 'p', 'text/plain', 1, 'user', 'u', 'U')
+      `).run(task.id);
+    }).toThrow(/CHECK constraint failed/);
+  });
+
+  it("CHECK constraint rejects rows with no parent set", () => {
+    const db = getDb();
+    expect(() => {
+      db.prepare(`
+        INSERT INTO attachments (id, kind, filename, storage_path, mime_type, size_bytes, uploaded_by_type, uploaded_by_id, uploaded_by_name)
+        VALUES ('a2', 'file', 'a.txt', 'p', 'text/plain', 1, 'user', 'u', 'U')
+      `).run();
+    }).toThrow(/CHECK constraint failed/);
   });
 });

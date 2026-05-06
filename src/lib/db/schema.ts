@@ -110,6 +110,74 @@ export function initializeSchema(db: Database.Database) {
   const hasOldProjectStages = !!db.prepare(
     `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'project_stages'`
   ).get();
+  // Pre-migration: rename run_attachments → attachments and add task_id +
+  // CHECK constraint. Existing rows preserve their run_id and get task_id NULL.
+  // Done via table rebuild because we need to drop the NOT NULL on run_id and
+  // add the (run_id IS NULL) != (task_id IS NULL) CHECK.
+  const hasOldRunAttachments = !!db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'run_attachments'`
+  ).get();
+  if (hasOldRunAttachments) {
+    db.pragma("foreign_keys = OFF");
+    db.exec(`
+      CREATE TABLE attachments (
+        id TEXT PRIMARY KEY,
+        run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
+        task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+        activity_id TEXT REFERENCES run_activity(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('file','embed')),
+        filename TEXT,
+        storage_path TEXT,
+        mime_type TEXT,
+        size_bytes INTEGER,
+        url TEXT,
+        embed_provider TEXT,
+        title TEXT,
+        uploaded_by_type TEXT CHECK(uploaded_by_type IN ('user','agent')),
+        uploaded_by_id TEXT,
+        uploaded_by_name TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        CHECK ((run_id IS NULL) != (task_id IS NULL))
+      );
+      INSERT INTO attachments (id, run_id, task_id, activity_id, kind, filename, storage_path, mime_type, size_bytes, url, embed_provider, title, uploaded_by_type, uploaded_by_id, uploaded_by_name, created_at)
+        SELECT id, run_id, NULL, activity_id, kind, filename, storage_path, mime_type, size_bytes, url, embed_provider, title, uploaded_by_type, uploaded_by_id, uploaded_by_name, created_at FROM run_attachments;
+      DROP TABLE run_attachments;
+      CREATE INDEX IF NOT EXISTS idx_attachments_run ON attachments(run_id);
+      CREATE INDEX IF NOT EXISTS idx_attachments_task ON attachments(task_id);
+      CREATE INDEX IF NOT EXISTS idx_attachments_activity ON attachments(activity_id);
+    `);
+    // attachment_processing.attachment_id was REFERENCES run_attachments(id) —
+    // rebuild it so the FK targets the new attachments table.
+    const attProcCreate = (db.prepare(
+      `SELECT sql FROM sqlite_master WHERE name = 'attachment_processing'`
+    ).get() as any)?.sql || "";
+    if (attProcCreate.includes("run_attachments")) {
+      db.exec(`
+        CREATE TABLE attachment_processing_new (
+          id TEXT PRIMARY KEY,
+          attachment_id TEXT NOT NULL UNIQUE REFERENCES attachments(id) ON DELETE CASCADE,
+          run_id TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('queued','processing','done','failed')),
+          transcript_path TEXT,
+          screenshots_dir TEXT,
+          screenshot_count INTEGER NOT NULL DEFAULT 0,
+          screenshot_interval INTEGER,
+          duration_seconds REAL,
+          error TEXT,
+          started_at INTEGER,
+          completed_at INTEGER,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        INSERT INTO attachment_processing_new SELECT * FROM attachment_processing;
+        DROP TABLE attachment_processing;
+        ALTER TABLE attachment_processing_new RENAME TO attachment_processing;
+        CREATE INDEX IF NOT EXISTS idx_attachment_processing_attachment ON attachment_processing(attachment_id);
+        CREATE INDEX IF NOT EXISTS idx_attachment_processing_run ON attachment_processing(run_id);
+      `);
+    }
+    db.pragma("foreign_keys = ON");
+  }
+
   if (hasOldProjectStages) {
     db.pragma("foreign_keys = OFF");
     db.exec(`UPDATE jobs SET watched_stage_id = NULL WHERE watched_stage_id IS NOT NULL`);
@@ -305,10 +373,13 @@ export function initializeSchema(db: Database.Database) {
       PRIMARY KEY (job_id, env_var_id)
     );
 
-    -- Run attachments: files uploaded to a run, or URL embeds (Loom/YouTube/Vimeo)
-    CREATE TABLE IF NOT EXISTS run_attachments (
+    -- Attachments: files uploaded to a run or task, or URL embeds (Loom/YouTube/Vimeo).
+    -- Polymorphic via run_id and task_id — exactly one is non-null. The CHECK
+    -- constraint enforces this at the storage layer.
+    CREATE TABLE IF NOT EXISTS attachments (
       id TEXT PRIMARY KEY,
-      run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
+      task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
       activity_id TEXT REFERENCES run_activity(id) ON DELETE SET NULL,
       kind TEXT NOT NULL CHECK(kind IN ('file','embed')),
       -- file kind:
@@ -324,7 +395,8 @@ export function initializeSchema(db: Database.Database) {
       uploaded_by_type TEXT CHECK(uploaded_by_type IN ('user','agent')),
       uploaded_by_id TEXT,
       uploaded_by_name TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      CHECK ((run_id IS NULL) != (task_id IS NULL))
     );
 
     -- Run output: raw streaming events from CLI agent execution
@@ -497,8 +569,9 @@ export function initializeSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_run_activity_run ON run_activity(run_id);
     CREATE INDEX IF NOT EXISTS idx_run_output_run ON run_output(run_id);
 
-    CREATE INDEX IF NOT EXISTS idx_run_attachments_run ON run_attachments(run_id);
-    CREATE INDEX IF NOT EXISTS idx_run_attachments_activity ON run_attachments(activity_id);
+    CREATE INDEX IF NOT EXISTS idx_attachments_run ON attachments(run_id);
+    CREATE INDEX IF NOT EXISTS idx_attachments_task ON attachments(task_id);
+    CREATE INDEX IF NOT EXISTS idx_attachments_activity ON attachments(activity_id);
     CREATE INDEX IF NOT EXISTS idx_doc_revisions_doc ON doc_revisions(doc_id);
     CREATE INDEX IF NOT EXISTS idx_database_migrations_db ON database_migrations(database_id);
     CREATE INDEX IF NOT EXISTS idx_jobs_schedule ON jobs(agent_id, active, next_run_at);

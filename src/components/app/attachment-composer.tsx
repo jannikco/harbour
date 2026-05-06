@@ -4,11 +4,12 @@ import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHand
 import { Paperclip, X, FileIcon, Image as ImageIcon, Video, Loader2, AlertCircle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  uploadFileToRun,
+  uploadFile,
   createEmbedAttachment,
   deleteAttachment,
   detectEmbedProvider,
   type UploadHandle,
+  type UploadParent,
 } from "@/lib/upload-client";
 import type { SerializedAttachment } from "@/lib/attachments-serialize";
 import { cn } from "@/lib/utils";
@@ -40,7 +41,9 @@ export type AttachmentComposerHandle = {
 };
 
 type Props = {
-  runId: string;
+  /** The attachment parent (run or task). Polymorphic so the same composer
+   *  drives both surfaces. */
+  parent: UploadParent;
   className?: string;
   /**
    * Called whenever the set of successfully-uploaded (but not yet submitted)
@@ -66,7 +69,7 @@ function iconFor(mime: string | undefined) {
 }
 
 export const AttachmentComposer = forwardRef<AttachmentComposerHandle, Props>(function AttachmentComposer(
-  { runId, className, onStagedIdsChange },
+  { parent, className, onStagedIdsChange },
   ref,
 ) {
   const [pending, setPending] = useState<Pending[]>([]);
@@ -118,7 +121,7 @@ export const AttachmentComposer = forwardRef<AttachmentComposerHandle, Props>(fu
         continue;
       }
 
-      const handle = uploadFileToRun(runId, file, pct => {
+      const handle = uploadFile(parent, file, pct => {
         update(localId, { progress: pct });
       });
 
@@ -137,7 +140,7 @@ export const AttachmentComposer = forwardRef<AttachmentComposerHandle, Props>(fu
         .then(att => update(localId, { status: "done", progress: 100, attachment: att, handle: undefined }))
         .catch(err => update(localId, { status: "error", error: err.message || String(err), handle: undefined }));
     }
-  }, [runId, maxBytes, maxMb, update]);
+  }, [parent, maxBytes, maxMb, update]);
 
   const addEmbedUrl = useCallback((url: string) => {
     const provider = detectEmbedProvider(url);
@@ -150,7 +153,7 @@ export const AttachmentComposer = forwardRef<AttachmentComposerHandle, Props>(fu
       status: "uploading",
       progress: 0,
     }]);
-    createEmbedAttachment(runId, url)
+    createEmbedAttachment(parent, url)
       .then(att => update(localId, {
         status: "done",
         progress: 100,
@@ -159,17 +162,17 @@ export const AttachmentComposer = forwardRef<AttachmentComposerHandle, Props>(fu
         mime: `video/${provider}`,
       }))
       .catch(err => update(localId, { status: "error", error: err.message || String(err) }));
-  }, [runId, update]);
+  }, [parent, update]);
 
   const handleRemove = useCallback(async (p: Pending) => {
     if (p.status === "uploading" && p.handle) {
       p.handle.abort();
     }
     if (p.attachment) {
-      try { await deleteAttachment(runId, p.attachment.id); } catch { /* ignore */ }
+      try { await deleteAttachment(parent, p.attachment.id); } catch { /* ignore */ }
     }
     remove(p.localId);
-  }, [runId, remove]);
+  }, [parent, remove]);
 
   useImperativeHandle(ref, () => ({
     drain: () => {
@@ -184,14 +187,14 @@ export const AttachmentComposer = forwardRef<AttachmentComposerHandle, Props>(fu
       for (const p of items) {
         if (p.status === "uploading" && p.handle) p.handle.abort();
         if (p.attachment) {
-          try { await deleteAttachment(runId, p.attachment.id); } catch { /* ignore */ }
+          try { await deleteAttachment(parent, p.attachment.id); } catch { /* ignore */ }
         }
       }
       setPending([]);
     },
     addEmbedUrl,
     addFiles,
-  }), [runId, addEmbedUrl, addFiles]);
+  }), [parent, addEmbedUrl, addFiles]);
 
   return (
     <div className={className}>

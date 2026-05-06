@@ -29,7 +29,20 @@ export function uploadsDir(): string {
 }
 
 export function runUploadsDir(runId: string): string {
-  return path.join(uploadsDir(), "runs", runId);
+  return parentUploadsDir("run", runId);
+}
+
+export function taskUploadsDir(taskId: string): string {
+  return parentUploadsDir("task", taskId);
+}
+
+/**
+ * Resolve the on-disk directory for a parent's uploads. Polymorphic over
+ * the attachment parent type (run or task) so a single helper works for both.
+ */
+export function parentUploadsDir(parentType: "run" | "task", parentId: string): string {
+  const segment = parentType === "run" ? "runs" : "tasks";
+  return path.join(uploadsDir(), segment, parentId);
 }
 
 export function encryptionKeyPath(): string {

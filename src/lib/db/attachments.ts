@@ -2,13 +2,23 @@ import fs from "fs";
 import path from "path";
 import { v4 as uuid } from "uuid";
 import { getDb } from "./schema";
-import { uploadsDir, runUploadsDir } from "../paths";
+import { uploadsDir, parentUploadsDir } from "../paths";
 
 export type AttachmentKind = "file" | "embed";
 
-export type RunAttachment = {
+export type ParentType = "run" | "task";
+
+export type Parent = { type: ParentType; id: string };
+
+/**
+ * An attachment row. Polymorphic via run_id and task_id — exactly one is set.
+ * The legacy `run_id` field is preserved for backward compatibility with any
+ * code that hasn't yet migrated to the parent abstraction.
+ */
+export type Attachment = {
   id: string;
-  run_id: string;
+  run_id: string | null;
+  task_id: string | null;
   activity_id: string | null;
   kind: AttachmentKind;
   filename: string | null;
@@ -23,6 +33,9 @@ export type RunAttachment = {
   uploaded_by_name: string | null;
   created_at: number;
 };
+
+/** Backward-compat alias: code that previously imported RunAttachment still works. */
+export type RunAttachment = Attachment;
 
 export type Uploader = {
   type: "user" | "agent";
@@ -47,25 +60,33 @@ export function detectEmbedProvider(url: string): string | null {
   }
 }
 
+function parentColumns(parent: Parent): { run_id: string | null; task_id: string | null } {
+  return parent.type === "run"
+    ? { run_id: parent.id, task_id: null }
+    : { run_id: null, task_id: parent.id };
+}
+
 export function createFileAttachment(params: {
-  runId: string;
+  parent: Parent;
   filename: string;
   storagePath: string; // relative to uploadsDir()
   mimeType: string;
   sizeBytes: number;
   uploader: Uploader;
   title?: string | null;
-}): RunAttachment {
+}): Attachment {
   const db = getDb();
   const id = uuid();
+  const { run_id, task_id } = parentColumns(params.parent);
   db.prepare(`
-    INSERT INTO run_attachments
-      (id, run_id, kind, filename, storage_path, mime_type, size_bytes, title,
+    INSERT INTO attachments
+      (id, run_id, task_id, kind, filename, storage_path, mime_type, size_bytes, title,
        uploaded_by_type, uploaded_by_id, uploaded_by_name)
-    VALUES (?, ?, 'file', ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, 'file', ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
-    params.runId,
+    run_id,
+    task_id,
     params.filename,
     params.storagePath,
     params.mimeType,
@@ -79,23 +100,25 @@ export function createFileAttachment(params: {
 }
 
 export function createEmbedAttachment(params: {
-  runId: string;
+  parent: Parent;
   url: string;
   uploader: Uploader;
   title?: string | null;
-}): RunAttachment {
+}): Attachment {
   const db = getDb();
   const provider = detectEmbedProvider(params.url);
   if (!provider) throw new Error("Invalid embed URL");
   const id = uuid();
+  const { run_id, task_id } = parentColumns(params.parent);
   db.prepare(`
-    INSERT INTO run_attachments
-      (id, run_id, kind, url, embed_provider, title,
+    INSERT INTO attachments
+      (id, run_id, task_id, kind, url, embed_provider, title,
        uploaded_by_type, uploaded_by_id, uploaded_by_name)
-    VALUES (?, ?, 'embed', ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, 'embed', ?, ?, ?, ?, ?, ?)
   `).run(
     id,
-    params.runId,
+    run_id,
+    task_id,
     params.url,
     provider,
     params.title ?? null,
@@ -106,29 +129,42 @@ export function createEmbedAttachment(params: {
   return getAttachmentById(id)!;
 }
 
-export function getAttachmentById(id: string): RunAttachment | null {
+export function getAttachmentById(id: string): Attachment | null {
   const db = getDb();
-  const row = db.prepare(`SELECT * FROM run_attachments WHERE id = ?`).get(id) as RunAttachment | undefined;
+  const row = db.prepare(`SELECT * FROM attachments WHERE id = ?`).get(id) as Attachment | undefined;
   return row || null;
 }
 
-export function listAttachmentsByRun(runId: string): RunAttachment[] {
+/** List attachments for a parent (run or task), oldest first. */
+export function listAttachmentsByParent(parent: Parent): Attachment[] {
   const db = getDb();
+  const col = parent.type === "run" ? "run_id" : "task_id";
   return db.prepare(
-    `SELECT * FROM run_attachments WHERE run_id = ? ORDER BY created_at ASC`
-  ).all(runId) as RunAttachment[];
+    `SELECT * FROM attachments WHERE ${col} = ? ORDER BY created_at ASC`
+  ).all(parent.id) as Attachment[];
+}
+
+/** Convenience: list attachments for a run. Backward-compat shim. */
+export function listAttachmentsByRun(runId: string): Attachment[] {
+  return listAttachmentsByParent({ type: "run", id: runId });
+}
+
+/** List attachments belonging to a task. */
+export function listAttachmentsByTask(taskId: string): Attachment[] {
+  return listAttachmentsByParent({ type: "task", id: taskId });
 }
 
 /**
- * Link a set of attachments (by id) to a newly-created activity entry.
- * Used when a comment is posted with previously-uploaded attachments.
+ * Link a set of attachments (by id) to a newly-created run activity entry.
+ * Used when a comment is posted with previously-uploaded attachments. Only
+ * applies to run-scoped attachments.
  */
 export function linkAttachmentsToActivity(attachmentIds: string[], activityId: string, runId: string): void {
   if (!attachmentIds.length) return;
   const db = getDb();
   const placeholders = attachmentIds.map(() => "?").join(",");
   db.prepare(
-    `UPDATE run_attachments SET activity_id = ? WHERE run_id = ? AND id IN (${placeholders}) AND activity_id IS NULL`
+    `UPDATE attachments SET activity_id = ? WHERE run_id = ? AND id IN (${placeholders}) AND activity_id IS NULL`
   ).run(activityId, runId, ...attachmentIds);
 }
 
@@ -143,15 +179,20 @@ export function deleteAttachment(id: string): boolean {
     const abs = path.join(uploadsDir(), att.storage_path);
     try { fs.unlinkSync(abs); } catch { /* file already gone — ignore */ }
   }
-  db.prepare(`DELETE FROM run_attachments WHERE id = ?`).run(id);
+  db.prepare(`DELETE FROM attachments WHERE id = ?`).run(id);
   return true;
 }
 
 /**
- * Remove the on-disk directory for a run's attachments. The DB rows
+ * Remove the on-disk directory for a parent's attachments. The DB rows
  * cascade-delete via the FK; this just cleans up the filesystem side.
  */
-export function deleteRunAttachmentsDir(runId: string): void {
-  const dir = runUploadsDir(runId);
+export function deleteParentAttachmentsDir(parent: Parent): void {
+  const dir = parentUploadsDir(parent.type, parent.id);
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
+/** Backward-compat shim for existing run delete paths. */
+export function deleteRunAttachmentsDir(runId: string): void {
+  deleteParentAttachmentsDir({ type: "run", id: runId });
 }
