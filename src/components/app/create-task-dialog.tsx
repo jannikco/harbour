@@ -33,6 +33,7 @@ export function CreateTaskDialog({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const [uploadingMessage, setUploadingMessage] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -41,6 +42,7 @@ export function CreateTaskDialog({
       setStaged([]);
       stagedRef.current = [];
       setUploadingMessage(null);
+      setDragging(false);
     }
   }, [open]);
 
@@ -108,13 +110,40 @@ export function CreateTaskDialog({
     onOpenChange(false);
   }
 
+  function handleDragOver(e: React.DragEvent) {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    setDragging(true);
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    // Only clear when leaving the form root, not crossing into a child
+    if (e.currentTarget === e.target) setDragging(false);
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragging(false);
+    if (e.dataTransfer.files.length > 0) {
+      addFiles(e.dataTransfer.files);
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>New Task in {stageName}</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4 pt-2">
+        <form
+          onSubmit={handleSubmit}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`space-y-4 pt-2 rounded-lg border border-transparent transition-colors ${
+            dragging ? "border-primary/60 bg-primary/5" : ""
+          }`}
+        >
           <div className="space-y-2">
             <Label>Title</Label>
             <Input
