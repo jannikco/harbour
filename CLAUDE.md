@@ -8,31 +8,42 @@ Next.js (App Router), SQLite (better-sqlite3), Tailwind / shadcn/ui, TypeScript.
 
 ## Key paths
 
-- `src/app/(app)/` — dashboard pages (runs, jobs, agents, docs, databases, env-vars, settings)
+- `src/app/(app)/` — dashboard pages (runs, jobs, agents, board, docs, databases, env-vars, settings)
 - `src/app/api/` — API routes (agent-facing + dashboard), all use `withAuth`/`withUserAuth` wrappers
-- `src/lib/db/projects.ts` — project CRUD + linking/unlinking (auto-links job dependencies)
+- `src/lib/db/projects.ts` — project CRUD + linking/unlinking (auto-links job dependencies, auto-creates a board)
+- `src/lib/db/boards.ts` — top-level + project-linked boards (kanban canvases)
+- `src/lib/db/stages.ts` — stage CRUD, transition graph, deletion guards
+- `src/lib/db/tasks.ts` — task CRUD, atomic claim, move-to-stage, activity log, the move-before-done helper
+- `src/lib/db/attachments.ts` — polymorphic attachments (run or task), AES-checked CHECK constraint
+- `src/lib/upload.ts` / `src/lib/upload-client.ts` — server (Busboy) + client (XHR + progress) upload helpers
+- `src/components/app/attachment-composer.tsx` — paste/drag/paperclip composer, takes `parent={type, id}`
 - `src/components/app/project-switcher.tsx` — sidebar/mobile project dropdown with create dialog
 - `src/components/app/project-link-dialog.tsx` — "Add Existing" dialog for linking items to projects
 - `src/lib/hooks/use-project-filter.ts` — hook for passing active project to API queries
-- `src/lib/auth.ts` — `withAuth`, `withUserAuth`, `requireAgentOwnership` HOF wrappers for API routes (admin API keys resolve to creating user's identity)
+- `src/lib/auth.ts` — `withAuth`, `withUserAuth`, `requireAgentOwnership`, `requireTaskClaim` HOF wrappers for API routes (admin API keys resolve to creating user's identity)
 - `src/lib/db/admin-api-keys.ts` — admin API key CRUD + authentication
-- `ADMIN_GUIDE.md` — admin agent onboarding guide, served at `/api/admin-guide`
 - `src/lib/db/` — database schema, queries, migrations
 - `src/lib/encryption.ts` — AES-256-GCM encryption for env vars
 - `src/lib/schedule.ts` — schedule parsing and timezone-aware next-run-time calculation
 - `src/lib/cli-config.ts` — shared CLI tool config (models, thinking options per tool)
 - `src/lib/runners.ts` — harbour agent runner config (read/write ~/.harbour/runners.json)
-- `src/components/app/create-dialog.tsx` — unified New Run / New Job dialog (shared component, dynamic type toggle for agent/workflow)
+- `src/components/app/create-dialog.tsx` — unified New Run / New Job dialog (shared component, dynamic type toggle for agent/workflow + Schedule/Task-stage trigger)
+- `src/components/app/create-task-dialog.tsx` — New Task dialog with file staging + drag-and-drop
 - `src/components/app/trigger-dialog.tsx` — shared trigger confirmation modal with optional extra instructions
 - `src/components/app/model-thinking-select.tsx` — shared Model/Thinking select for CLI agents
 - `bin/` — CLI entry point and agent runner (harbour agents, workflow execution, providers, launchd install)
 - `src/app/api/workflows/next/` — runner endpoint for discovering agentless workflow-only runs
 - `GUIDE.md` — agent-facing API contract, served at `/api/guide`
+- `ADMIN_GUIDE.md` — admin agent onboarding guide, served at `/api/admin-guide`
+- `docs/` — long-form documentation (concepts, guides, reference). See `docs/README.md` for the index.
 
 ## Conventions
 
 - Jobs are static configuration (what to do, when, which docs/databases/env vars). Runs are the dynamic unit of work.
 - Jobs are either agent jobs (belong to an agent), workflow-only jobs (no agent, shell command only), or combined (workflow gates the agent). Workflow-only jobs have nullable `agent_id`.
+- Jobs trigger on either `schedule` (cron-like) or `task_stage` (a card on a board). Task-triggered runs are bound to a task; the API rejects `done` if the task is still in the watched stage (move-before-done gate).
+- Boards are top-level entities with optional `project_id`. Each project gets one auto-created board on `createProject`; a top-level board (`project_id IS NULL`) exists for project-less use. Stages and tasks reference `board_id`.
+- Attachments are polymorphic over runs and tasks: the `attachments` table has nullable `run_id` and `task_id` with a CHECK constraint that exactly one is set.
 - Docs and env vars are top-level, linked to jobs. Injected into runs automatically via `/next`.
 - Pinned docs and env vars are auto-attached to all new jobs and one-off runs.
 - Agents poll for work via `/api/agents/:id/next`. Agentless workflow jobs are discovered via `/api/workflows/next`. Harbour never calls out to agents.

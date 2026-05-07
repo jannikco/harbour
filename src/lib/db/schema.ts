@@ -451,7 +451,7 @@ export function initializeSchema(db: Database.Database) {
     -- Video processing: tracks processing state for uploaded video attachments
     CREATE TABLE IF NOT EXISTS attachment_processing (
       id TEXT PRIMARY KEY,
-      attachment_id TEXT NOT NULL UNIQUE REFERENCES run_attachments(id) ON DELETE CASCADE,
+      attachment_id TEXT NOT NULL UNIQUE REFERENCES attachments(id) ON DELETE CASCADE,
       run_id TEXT NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('queued','processing','done','failed')),
       transcript_path TEXT,

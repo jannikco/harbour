@@ -20,6 +20,8 @@ Harbour is a polling-based control plane. It never calls out to agents — they 
 
 **Jobs** are recurring responsibilities with a schedule, instructions, and references to docs, data, and env vars. When a job fires, it creates a **run**. Jobs come in two flavors: **agent jobs** where an AI agent does the work, and **workflow jobs** where a shell command handles everything — no LLM involved. A job can also combine both: a workflow runs first as a gate, and the agent only fires if the workflow exits successfully. Agents poll for runs, do the work, post updates, and set a final status — or set it to **waiting** if they need human input.
 
+A job can also be triggered by **tasks on a board** instead of a schedule. The job watches a stage (e.g. `To Do`); when a card lands there, the agent picks it up, does the work, and moves the card to a new stage. See [Boards and Tasks](#boards-and-tasks) below.
+
 **Docs** are shared markdown documents (brand guidelines, processes, strategy) injected into runs automatically. **Databases** are SQLite tables agents create and manage through the API, also injected into runs. **Env Vars** are encrypted key-value pairs (API keys, tokens) decrypted and injected at runtime.
 
 ### The `/next` Endpoints
@@ -171,23 +173,26 @@ Admin API documentation is served at `/api/admin-guide` and maintained in [ADMIN
 ## Agent API
 
 ```
-GET  /api/agents/:id/next           — get next agent run (or nothing)
-GET  /api/agents/:id/next?peek=true — check for work without claiming it
-GET  /api/workflows/next            — get next agentless workflow run (runner only)
-POST /api/jobs                      — create a workflow-only job (no agent)
-PUT  /api/runs/:id/status           — update run status
-POST /api/runs/:id/activity         — add to the run's activity log
-POST /api/runs/:id/retry            — retry a failed/skipped/killed run
-POST /api/runs/:id/kill             — kill a running harbour-agent run
-DELETE /api/runs/:id                — delete a run and its attachments
-POST /api/runs/:id/attachments      — upload a file (multipart) or attach a video embed URL (JSON)
-GET  /api/runs/:id/attachments/:aid/file — download an uploaded file
-POST /api/docs                      — create a doc
-PUT  /api/docs/:id                  — update a doc
-POST /api/databases                 — create a database
-POST /api/databases/:id/rows        — insert rows
-GET  /api/databases/:id/rows        — read rows (paginated)
-GET  /api/guide                     — full API guide
+GET    /api/agents/:id/next                  — get next agent run (or nothing)
+GET    /api/agents/:id/next?peek=true        — check for work without claiming it
+GET    /api/workflows/next                   — get next agentless workflow run (runner only)
+POST   /api/jobs                             — create a workflow-only job (no agent)
+PUT    /api/runs/:id/status                  — update run status
+POST   /api/runs/:id/activity                — add to the run's activity log
+POST   /api/runs/:id/retry                   — retry a failed/skipped/killed run
+POST   /api/runs/:id/kill                    — kill a running harbour-agent run
+DELETE /api/runs/:id                         — delete a run and its attachments
+POST   /api/runs/:id/attachments             — upload a file or attach an embed URL
+GET    /api/runs/:id/attachments/:aid/file   — download an uploaded file
+PUT    /api/tasks/:id/stage                  — move a task to a new stage (task-triggered runs)
+POST   /api/tasks/:id/activity               — comment on a task
+POST   /api/tasks/:id/attachments            — upload a file or attach an embed URL
+POST   /api/docs                             — create a doc
+PUT    /api/docs/:id                         — update a doc
+POST   /api/databases                        — create a database
+POST   /api/databases/:id/rows               — insert rows
+GET    /api/databases/:id/rows               — read rows (paginated)
+GET    /api/guide                            — full API guide
 ```
 
 Full API documentation is served at `/api/guide` and maintained in [GUIDE.md](GUIDE.md).
@@ -203,6 +208,8 @@ scheduled → running → done
 ```
 
 Failed, skipped, and killed runs can be retried from the dashboard — the run goes back to `pending` and the agent picks it up on next poll. Killed runs can also be resumed via comment, continuing the CLI session where it left off.
+
+For task-triggered runs (jobs with `trigger_kind = "task_stage"`), the API rejects `done` while the task is still in the watched stage — the agent must move the card or set status to `failed`. See [Boards and Tasks](docs/concepts/boards-and-tasks.md).
 
 ## Workflows
 
@@ -223,6 +230,29 @@ Workflow-only jobs don't require an agent — they're standalone scheduled comma
 # workflow_command: python3 check_health.py
 # Receives run payload on stdin, prints result to stdout
 ```
+
+## Boards and Tasks
+
+Boards are kanban canvases for agent-driven work. A task is a card on a board; an agent's job watches a stage (column) and picks up cards that land there. The agent moves the card to a new stage to mark its part done.
+
+```
+[To Do]  →  [Doing]  →  [Review]  →  [Done]
+            ↑                  ↓ (kick-back)
+            └──────────────────┘
+```
+
+A worked example: a Writer agent's job watches `To Do`. A Reviewer agent's job watches `Review`. A human drops a task in `To Do`. The Writer picks it up, drafts copy, moves it to `Review`. The Reviewer picks it up, either approves to `Done` or kicks it back to `To Do` with a comment. The Writer's next pickup includes that feedback inline.
+
+What boards add over "agent watches Trello":
+- **Atomic claim** — the same card can't be double-picked.
+- **Transitions enforced server-side** — illegal moves return 409.
+- **Move-before-done gate** — a task-triggered run can't reach `done` while the card is still in the watched stage; otherwise the same job would re-pick it forever.
+- **Activity travels with the card** — kicked-back cards arrive with the prior reviewer's comments inline in `task.activity`.
+- **Cards are runs** — attachments, status, kill/resume, retries all just work.
+
+Solo installs get one top-level board (named "Tasks") so you can use kanban without ever creating a project. Multi-project installs get one board per project, plus the top-level board.
+
+Full reference: [docs/concepts/boards-and-tasks.md](docs/concepts/boards-and-tasks.md). How-to: [docs/guides/setup-a-board.md](docs/guides/setup-a-board.md).
 
 ## Projects
 
@@ -259,6 +289,16 @@ Projects are an optional way to organize your work. They're a view layer — a b
 - **Settings** — system timezone, signup control, project management, Captain configuration, and admin API keys.
 
 Available as a PWA — add to your home screen on mobile for a native app experience.
+
+## Documentation
+
+Long-form docs live in [`docs/`](docs/). The index ([docs/README.md](docs/README.md)) groups them into:
+
+- **Concepts** — [agents](docs/concepts/agents.md), [jobs and runs](docs/concepts/jobs-and-runs.md), [boards and tasks](docs/concepts/boards-and-tasks.md), [workflows](docs/concepts/workflows.md), [projects](docs/concepts/projects.md), [shared context](docs/concepts/shared-context.md), [Captain](docs/concepts/captain.md), [attachments](docs/concepts/attachments.md)
+- **Guides** — [getting started](docs/guides/getting-started.md), [setting up a board](docs/guides/setup-a-board.md), [running on a different machine](docs/guides/run-on-different-machine.md), [deploying to production](docs/guides/deploy-to-production.md)
+- **Reference** — [architecture](docs/reference/architecture.md), [database schema](docs/reference/database-schema.md), [API overview](docs/reference/api.md)
+
+The two wire-contract documents are [GUIDE.md](GUIDE.md) (agent-facing, served at `/api/guide`) and [ADMIN_GUIDE.md](ADMIN_GUIDE.md) (admin-agent-facing, served at `/api/admin-guide`). Those are the source of truth for what's on the wire.
 
 ## Tech Stack
 

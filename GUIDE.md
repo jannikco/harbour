@@ -442,6 +442,42 @@ If you set the run to `done` while the task is still in your watched stage, the 
 
 Some columns (typically a final QA or "Done" stage) have no job watching them. Cards land there and wait for a human to move them — that's the human-in-the-loop flow. Nothing for an agent to do; just move cards into those stages when your part of the work is finished.
 
+### Task Attachments
+
+Tasks have their own attachment endpoints — the same shape as run attachments, just scoped to the task. While your run holds the claim, you can upload files or embed URLs to the task. Files live in the task's storage area and persist after the run finishes.
+
+**Upload a file (multipart/form-data):**
+```
+POST /api/tasks/:id/attachments
+Content-Type: multipart/form-data; boundary=...
+
+--boundary
+Content-Disposition: form-data; name="file"; filename="screenshot.png"
+Content-Type: image/png
+
+<binary>
+--boundary--
+```
+
+**Attach an embed URL (JSON):**
+```
+POST /api/tasks/:id/attachments
+Content-Type: application/json
+
+{ "url": "https://www.loom.com/share/abc123", "title": "Walkthrough" }
+```
+
+**List / delete / download:**
+```
+GET    /api/tasks/:id/attachments
+DELETE /api/tasks/:id/attachments/:aid
+GET    /api/tasks/:id/attachments/:aid/file
+```
+
+The same Bearer token works for all of them. Per-file size cap is set by `HARBOUR_MAX_UPLOAD_MB` on the server (default 500MB).
+
+Attachments belong to the task, not your individual run — they're visible to whichever agent picks the card up next, including the original requester. Use them when you've produced an artifact that should travel with the card (a generated image, a CSV report, a Loom recording explaining a finding).
+
 ## Reference Runner
 
 ```bash

@@ -14,6 +14,8 @@ Key concepts:
 - **Databases** — SQLite tables agents create and manage, injected into runs.
 - **Env Vars** — encrypted key-value pairs (API keys, tokens) decrypted at runtime.
 - **Projects** — optional groupings to organize agents, jobs, docs, env vars, and databases.
+- **Boards** — kanban canvases. Each project gets one auto-created on `POST /api/projects`; a top-level board exists for the project-less case. Stages are columns; transitions between them are explicit and enforced by the API.
+- **Tasks** — cards on a board. Belong to a stage. A job whose `triggerKind = "task_stage"` watches a stage and processes its cards. The polling agent must move the card to a new stage before marking the run done.
 
 ## Authentication
 
@@ -223,7 +225,7 @@ DELETE /api/runs/:id/attachments/:aid
 GET    /api/runs/:id/attachments/:aid/file
 ```
 
-Per-file size cap is set by the server's `HARBOUR_MAX_UPLOAD_MB` (default 100MB).
+Per-file size cap is set by the server's `HARBOUR_MAX_UPLOAD_MB` (default 500MB).
 
 ## Docs
 
@@ -375,6 +377,149 @@ Valid types: `agent`, `job`, `doc`, `env-var`, `database`.
 
 Adding a job to a project auto-links its agent, docs, env vars, and databases.
 
+## Boards
+
+A board is a kanban canvas. Tasks (cards) belong to stages (columns). When a project is created, a board named "Tasks" is auto-created for it with a default `To Do → Doing → Review → Done` layout. A top-level board (no project) exists too — that's what solo installs use.
+
+### List Boards
+```
+GET /api/boards
+```
+Returns every board (top-level first, then project-linked) with `stage_count` and `task_count`.
+
+### Create a Board
+```
+POST /api/boards
+Content-Type: application/json
+
+{ "name": "Tasks", "projectId": null }
+```
+Pass `projectId: null` for a top-level board, or a project id to attach. Default stages (To Do/Doing/Review/Done) are seeded automatically.
+
+### Get / Update / Delete a Board
+```
+GET    /api/boards/:id            — board + stages + their tasks (the kanban view payload)
+PUT    /api/boards/:id            { "name": "..." }
+DELETE /api/boards/:id            — cascades stages and tasks
+```
+
+### List Stages on a Board
+```
+GET /api/boards/:id/stages
+```
+Returns each stage with its `transitions_to` list (legal next-stage ids) and a `jobs_watching` count.
+
+### Create a Stage
+```
+POST /api/boards/:id/stages
+Content-Type: application/json
+
+{ "name": "QA", "is_terminal": false }
+```
+
+### Bulk Update Stage Order + Transitions
+```
+PUT /api/boards/:id/stages
+Content-Type: application/json
+
+{
+  "order": ["<stage_id>", "<stage_id>", "..."],
+  "transitions": {
+    "<from_stage_id>": ["<to_stage_id>", "..."]
+  }
+}
+```
+Either field is optional. The API validates that every stage id belongs to this board.
+
+### Update / Delete a Stage
+```
+PUT    /api/boards/:id/stages/:stageId   { "name": "...", "is_terminal": true }
+DELETE /api/boards/:id/stages/:stageId
+```
+Delete is rejected (409) if active tasks live in the stage or if any job watches it.
+
+## Tasks
+
+### List Tasks on a Board
+```
+GET /api/tasks?boardId=<id>
+```
+
+### Create a Task
+```
+POST /api/tasks
+Content-Type: application/json
+
+{
+  "boardId": "<uuid>",
+  "stageId": "<uuid>",
+  "title": "Write Q2 social calendar",
+  "description": "Two posts/week across X, LinkedIn, Instagram. Use the brand-voice doc.",
+  "insertAt": "bottom"
+}
+```
+`insertAt` is `"top"` or `"bottom"` (default). Tasks are ordered by integer `position` within their stage; top-of-column wins next agent pickup.
+
+### Get / Update / Delete a Task
+```
+GET    /api/tasks/:id                — task + activity (with stage names resolved)
+PUT    /api/tasks/:id                { "title": "...", "description": "..." }
+DELETE /api/tasks/:id
+```
+
+### Move a Task
+```
+PUT /api/tasks/:id/stage
+Content-Type: application/json
+
+{ "toStageId": "<uuid>", "comment": "Optional note explaining the move" }
+```
+The API rejects (409) any move that's not in the source stage's `transitions_to` list, and rejects moves while the task is claimed by an active agent run.
+
+### Comment on a Task
+```
+POST /api/tasks/:id/activity
+Content-Type: application/json
+
+{ "content": "Halfway done — pulling stats from the API now." }
+```
+
+### Archive a Task
+```
+POST /api/tasks/:id/archive
+```
+Archived tasks stay in the DB but no longer appear in board listings or get picked up by agent polls.
+
+### Watcher Jobs
+
+Create a job with a task-stage trigger so an agent processes cards on a column:
+```
+POST /api/agents/:id/jobs
+Content-Type: application/json
+
+{
+  "name": "Writer",
+  "instructions": "When a card lands in To Do, draft the post and move it to Review.",
+  "schedule": "{}",
+  "triggerKind": "task_stage",
+  "watchedStageId": "<uuid>"
+}
+```
+`schedule` is required by the schema but ignored for task-stage jobs (pass `"{}"`). The agent's polling endpoint will pick up cards on its watched stage atomically; multiple jobs may watch the same stage.
+
+### Task Attachments
+
+Tasks support file uploads and embed URLs the same way runs do.
+
+```
+POST   /api/tasks/:id/attachments       — multipart file or { "url": "..." }
+GET    /api/tasks/:id/attachments
+DELETE /api/tasks/:id/attachments/:aid
+GET    /api/tasks/:id/attachments/:aid/file
+```
+
+Per-file cap: `HARBOUR_MAX_UPLOAD_MB` (default 500MB). Embeds: YouTube, Loom, Vimeo, generic.
+
 ## Settings
 
 ### Get All Settings
@@ -443,6 +588,13 @@ DELETE /api/admin-api-keys/:id
 ### Organize work into a project
 1. `POST /api/projects` — create the project
 2. `PATCH /api/projects/:id` — link agents, jobs, docs, env vars, databases
+
+### Set up a kanban board with watcher agents
+1. `POST /api/projects` — creates the project AND a default board (`To Do → Doing → Review → Done`)
+2. `GET /api/boards` — find the board id (it'll be the one with your `project_id`)
+3. `GET /api/boards/:id/stages` — list the stages, capture the ids you need to watch
+4. `POST /api/agents/:id/jobs` for each watcher — set `triggerKind: "task_stage"` and `watchedStageId` to the stage id
+5. `POST /api/tasks` to drop a card; the watching agent picks it up on its next poll
 
 ### Check system status
 1. `GET /api/agents` — see all agents and their poll status
