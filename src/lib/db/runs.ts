@@ -488,7 +488,7 @@ function buildRunPayload(runId: string) {
   const agent = agentRow ? { eager: !!agentRow.eager } : undefined;
 
   return {
-    run: { id: run.id, status: run.status, activity: run.activity },
+    run: { id: run.id, status: run.status, activity: run.activity, extra_instructions: run.extra_instructions || null },
     job: {
       id: job.id,
       name: job.name,

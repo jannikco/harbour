@@ -14,6 +14,8 @@ import {
   unlinkEnvVarFromProject,
   linkDatabaseToProject,
   unlinkDatabaseFromProject,
+  linkInspirationToProject,
+  unlinkInspirationFromProject,
 } from "@/lib/db/queries";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -58,6 +60,7 @@ export const PATCH = withUserAuth(async (req: NextRequest, auth, ctx) => {
     doc: { link: linkDocToProject, unlink: unlinkDocFromProject },
     "env-var": { link: linkEnvVarToProject, unlink: unlinkEnvVarFromProject },
     database: { link: linkDatabaseToProject, unlink: unlinkDatabaseFromProject },
+    inspiration: { link: linkInspirationToProject, unlink: unlinkInspirationFromProject },
   };
 
   const linker = linkers[type];

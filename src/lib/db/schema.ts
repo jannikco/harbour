@@ -272,6 +272,39 @@ export function initializeSchema(db: Database.Database) {
       PRIMARY KEY (project_id, database_id)
     );
 
+    -- Inspirations: other people's LinkedIn posts to research and generate
+    -- content from. Fetched via Playwright, analyzed + drafted by the
+    -- Inspirations Processor agent.
+    CREATE TABLE IF NOT EXISTS inspiration_posts (
+      id TEXT PRIMARY KEY,
+      url TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued'
+        CHECK(status IN ('queued','processing','done','failed')),
+      source_author TEXT,
+      source_author_url TEXT,
+      source_posted_at_text TEXT,
+      source_text TEXT,
+      source_image_urls TEXT,
+      source_reactions INTEGER,
+      source_comments INTEGER,
+      analysis TEXT,
+      post_draft TEXT,
+      reply_draft TEXT,
+      topic_ideas TEXT,
+      run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+      error TEXT,
+      created_by_type TEXT CHECK(created_by_type IN ('user','agent')),
+      created_by_id TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+
+    CREATE TABLE IF NOT EXISTS project_inspiration_posts (
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      inspiration_post_id TEXT NOT NULL REFERENCES inspiration_posts(id) ON DELETE CASCADE,
+      PRIMARY KEY (project_id, inspiration_post_id)
+    );
+
     -- Video processing: tracks processing state for uploaded video attachments
     CREATE TABLE IF NOT EXISTS attachment_processing (
       id TEXT PRIMARY KEY,
@@ -342,6 +375,9 @@ export function initializeSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_captain_conversations_user ON captain_conversations(user_id);
     CREATE INDEX IF NOT EXISTS idx_captain_messages_conversation ON captain_messages(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_captain_output_conversation ON captain_output(conversation_id);
+
+    CREATE INDEX IF NOT EXISTS idx_inspiration_posts_status ON inspiration_posts(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_inspiration_posts_run ON inspiration_posts(run_id);
   `);
 
   // Migrations: drop agent_id from docs (now top-level)

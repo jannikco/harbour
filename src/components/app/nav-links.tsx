@@ -18,6 +18,7 @@ import {
   Kanban,
   Newspaper,
   Mail,
+  Lightbulb,
 } from "lucide-react";
 import { LinkedInIcon } from "./linkedin-icon";
 
@@ -58,6 +59,7 @@ export function NavLinks({ onClick }: { onClick?: () => void }) {
     { href: "/contacts", label: "Contacts", icon: ContactIcon },
     { href: "/pipeline", label: "Pipeline", icon: Kanban },
     { href: "/posts", label: "Posts", icon: Newspaper },
+    { href: "/inspirations", label: "Inspirations", icon: Lightbulb },
     { href: "/dms", label: "DMs", icon: Mail, badge: dmQueueCount },
     { href: "/env-vars", label: "Env Vars", icon: KeyRound },
     { href: "/linkedin", label: "LinkedIn", icon: LinkedInIcon },

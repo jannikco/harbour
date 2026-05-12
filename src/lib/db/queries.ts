@@ -12,3 +12,4 @@ export * from "./extension-api-keys";
 export * from "./attachments";
 export * from "./video-processing";
 export * from "./captain";
+export * from "./inspirations";

@@ -149,3 +149,20 @@ export function listDatabaseIdsForProject(projectId: string): string[] {
   const db = getDb();
   return (db.prepare(`SELECT database_id FROM project_databases WHERE project_id = ?`).all(projectId) as { database_id: string }[]).map(r => r.database_id);
 }
+
+// --- Linking: Inspirations ---
+
+export function linkInspirationToProject(projectId: string, inspirationPostId: string) {
+  const db = getDb();
+  db.prepare(`INSERT OR IGNORE INTO project_inspiration_posts (project_id, inspiration_post_id) VALUES (?, ?)`).run(projectId, inspirationPostId);
+}
+
+export function unlinkInspirationFromProject(projectId: string, inspirationPostId: string) {
+  const db = getDb();
+  db.prepare(`DELETE FROM project_inspiration_posts WHERE project_id = ? AND inspiration_post_id = ?`).run(projectId, inspirationPostId);
+}
+
+export function listInspirationIdsForProject(projectId: string): string[] {
+  const db = getDb();
+  return (db.prepare(`SELECT inspiration_post_id FROM project_inspiration_posts WHERE project_id = ?`).all(projectId) as { inspiration_post_id: string }[]).map(r => r.inspiration_post_id);
+}
