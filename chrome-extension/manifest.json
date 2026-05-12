@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Harbour LinkedIn Bridge",
+  "version": "0.1.0",
+  "description": "Syncs LinkedIn session cookies + executes Harbour DM actions in the user's real Chrome (no fingerprint mismatch).",
+  "permissions": ["cookies", "storage", "alarms"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://*.linkedin.com/*",
+    "http://localhost:3000/*",
+    "http://localhost:3001/*",
+    "http://localhost:3010/*",
+    "http://localhost:3011/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Harbour LinkedIn Bridge" },
+  "icons": {}
+}

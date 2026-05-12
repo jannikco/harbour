@@ -18,9 +18,9 @@ import { isVideoFile, processVideoAttachment } from "@/lib/video-processing";
 export const runtime = "nodejs";
 
 function uploaderFromAuth(auth: AuthContext): Uploader {
-  return auth.type === "user"
-    ? { type: "user", id: auth.userId, name: auth.displayName }
-    : { type: "agent", id: auth.agentId, name: auth.agentName };
+  if (auth.type === "user") return { type: "user", id: auth.userId, name: auth.displayName };
+  if (auth.type === "extension") return { type: "user", id: auth.ownerUserId, name: auth.ownerDisplayName };
+  return { type: "agent", id: auth.agentId, name: auth.agentName };
 }
 
 export const GET = withAuth(async (req, auth, { params }) => {

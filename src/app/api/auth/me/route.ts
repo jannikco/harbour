@@ -7,6 +7,9 @@ export const GET = withAuth(async (req, auth) => {
     const user = getUserById(auth.userId);
     return NextResponse.json({ type: "user", user });
   }
+  if (auth.type === "extension") {
+    return NextResponse.json({ type: "extension", extensionKeyId: auth.extensionKeyId });
+  }
 
   const agent = getAgentById(auth.agentId);
   return NextResponse.json({ type: "agent", agent });

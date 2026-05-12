@@ -502,6 +502,26 @@ export function initializeSchema(db: Database.Database) {
     `);
   }
 
+  // Migrations: extension API keys table — for Chrome extension cookie-sync +
+  // action-proxy. Scoped narrowly (only /api/linkedin/session-sync and
+  // /api/linkedin/extension/* routes) so a compromised extension can't
+  // access the wider Harbour surface.
+  const extKeyCols = db.prepare(`PRAGMA table_info(extension_api_keys)`).all() as any[];
+  if (extKeyCols.length === 0) {
+    db.exec(`
+      CREATE TABLE extension_api_keys (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        api_key_hash TEXT NOT NULL UNIQUE,
+        created_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        last_used_at INTEGER,
+        last_synced_at INTEGER,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      )
+    `);
+  }
+
   // Migrations: add extra_instructions, session_id, session_cwd columns to runs
   const runCols = db.prepare(`PRAGMA table_info(runs)`).all() as any[];
   if (!runCols.some((c: any) => c.name === "extra_instructions")) {

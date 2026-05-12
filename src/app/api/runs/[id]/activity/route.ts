@@ -33,6 +33,9 @@ export const POST = withAuth(async (req, auth, { params }) => {
     return NextResponse.json({ error: "content or attachment_ids required" }, { status: 400 });
   }
 
+  if (auth.type === "extension") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const authorType = auth.type === "user" ? "user" : "agent";
   const authorId = auth.type === "user" ? auth.userId : auth.agentId;
   const authorName = auth.type === "user" ? auth.displayName : auth.agentName;

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Harbour LinkedIn Bridge</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>Harbour LinkedIn Bridge</h1>
+
+  <section>
+    <label for="harbourUrl">Harbour URL</label>
+    <input type="url" id="harbourUrl" placeholder="http://localhost:3000" />
+
+    <label for="extToken">Extension token (<code>hbr_ext_...</code>)</label>
+    <input type="password" id="extToken" placeholder="paste from /linkedin → Extension token" />
+
+    <div class="row">
+      <button id="save">Save</button>
+      <button id="sync">Sync cookies now</button>
+      <button id="poll">Poll actions now</button>
+    </div>
+    <p id="saveStatus" class="hint"></p>
+  </section>
+
+  <section class="status">
+    <h2>Status</h2>
+    <div id="status">Loading…</div>
+  </section>
+
+  <p class="footnote">
+    Get your token from Harbour → <code>/linkedin</code> → "Generate extension token".
+    Token + cookies stay between your Chrome and your Harbour. Nothing leaves your machine.
+  </p>
+
+  <script src="popup.js"></script>
+</body>
+</html>

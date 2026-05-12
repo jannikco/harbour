@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
-import { getSession, authenticateAgent, authenticateAdminApiKey } from "./db/queries";
+import { getSession, authenticateAgent, authenticateAdminApiKey, authenticateExtensionApiKey } from "./db/queries";
 
 export type UserAuth = {
   type: "user";
@@ -15,7 +15,15 @@ export type AgentAuth = {
   agentName: string;
 };
 
-export type AuthContext = UserAuth | AgentAuth;
+export type ExtensionAuth = {
+  type: "extension";
+  extensionKeyId: string;
+  ownerUserId: string;
+  ownerEmail: string;
+  ownerDisplayName: string;
+};
+
+export type AuthContext = UserAuth | AgentAuth | ExtensionAuth;
 
 type RouteContext = { params: Promise<Record<string, string>> };
 
@@ -39,6 +47,21 @@ async function getAuthFromRequest(req: NextRequest): Promise<AuthContext | null>
       return { type: "user", userId: adminKey.created_by_user_id, email: adminKey.email, displayName: adminKey.display_name };
     }
 
+    // Extension API keys — narrowly scoped. The route handler MUST verify the
+    // request is for an extension-allowed path (we gate that via withExtensionAuth).
+    if (apiKey.startsWith("hbr_ext_")) {
+      const extKey = authenticateExtensionApiKey(apiKey);
+      if (extKey) {
+        return {
+          type: "extension",
+          extensionKeyId: extKey.id,
+          ownerUserId: extKey.created_by_user_id,
+          ownerEmail: extKey.email,
+          ownerDisplayName: extKey.display_name,
+        };
+      }
+    }
+
     return null;
   }
 
@@ -59,6 +82,24 @@ export function withAuth(handler: AuthHandler) {
     const auth = await getAuthFromRequest(req);
     if (!auth) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    return handler(req, auth, ctx);
+  };
+}
+
+// Gate for the extension's narrow surface (session-sync + /extension/* routes).
+// Accepts an ExtensionAuth or a UserAuth (so the dashboard can hit these
+// endpoints for testing). Rejects agent and unauthenticated callers.
+type ExtensionAuthHandler = (req: NextRequest, auth: ExtensionAuth | UserAuth, ctx: RouteContext) => Promise<Response>;
+
+export function withExtensionAuth(handler: ExtensionAuthHandler) {
+  return async (req: NextRequest, ctx: RouteContext) => {
+    const auth = await getAuthFromRequest(req);
+    if (!auth) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (auth.type === "agent") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     return handler(req, auth, ctx);
   };
@@ -98,6 +139,9 @@ export function requireAgentOwnership(auth: AuthContext, agentId: string | null)
 export function getActorFromAuth(auth: AuthContext): { actorType: string; actorId: string } {
   if (auth.type === "user") {
     return { actorType: "user", actorId: auth.userId };
+  }
+  if (auth.type === "extension") {
+    return { actorType: "extension", actorId: auth.extensionKeyId };
   }
   return { actorType: "agent", actorId: auth.agentId };
 }
