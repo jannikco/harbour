@@ -17,6 +17,7 @@ import {
   Copy,
   KeyRound,
   Trash2,
+  Download,
 } from "lucide-react";
 import { LinkedInIcon } from "@/components/app/linkedin-icon";
 
@@ -642,6 +643,8 @@ function BrowserSessionSection({
   const [generating, setGenerating] = useState(false);
   const [rawKey, setRawKey] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadErr, setDownloadErr] = useState<string | null>(null);
 
   async function load() {
     const r = await fetch("/api/linkedin/extension/token");
@@ -686,6 +689,35 @@ function BrowserSessionSection({
     try { await navigator.clipboard.writeText(s); setMsg("Copied to clipboard."); } catch { /* ignore */ }
   }
 
+  async function downloadExtension() {
+    setDownloading(true);
+    setDownloadErr(null);
+    try {
+      const r = await fetch("/api/linkedin/extension/download");
+      if (!r.ok) {
+        const text = await r.text().catch(() => "");
+        setDownloadErr(text || `Download failed (HTTP ${r.status})`);
+        return;
+      }
+      const disposition = r.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match?.[1] || "harbour-linkedin-bridge.zip";
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setDownloadErr(err instanceof Error ? err.message : "Download failed");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   const latestSyncTs = data?.latest_synced_at;
   const syncFresh = latestSyncTs != null && (Date.now() / 1000 - latestSyncTs) < 600;
   const syncStale = latestSyncTs != null && (Date.now() / 1000 - latestSyncTs) >= 14400;
@@ -700,9 +732,25 @@ function BrowserSessionSection({
             Install the Harbour LinkedIn Bridge extension in your daily Chrome.
             It syncs your real LinkedIn cookies + sends approved DMs via your
             actual browser — no Playwright fingerprint, no expired sessions.
-            Install guide: <code className="rounded bg-muted px-1.5 py-0.5">~/GitHub/harbour/chrome-extension/README.md</code>
           </p>
         </div>
+      </div>
+
+      <div className="mb-4 rounded-md border bg-background p-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <Button size="sm" variant="outline" onClick={downloadExtension} disabled={downloading} className="gap-2">
+            {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+            Download extension
+          </Button>
+          <span className="text-xs text-muted-foreground">.zip · unpacked Chrome extension</span>
+          {downloadErr && <span className="text-xs text-destructive">{downloadErr}</span>}
+        </div>
+        <ol className="mt-3 space-y-1 text-xs text-muted-foreground list-decimal pl-5">
+          <li>Click <strong>Download extension</strong> above and unzip the file.</li>
+          <li>Open <code className="rounded bg-muted px-1.5 py-0.5">chrome://extensions</code> in Chrome and enable <strong>Developer mode</strong> (top-right).</li>
+          <li>Click <strong>Load unpacked</strong> and select the unzipped folder.</li>
+          <li>Open the extension popup, paste your Harbour URL and a token from <strong>Extension tokens</strong> below, click <strong>Sync now</strong>.</li>
+        </ol>
       </div>
 
       {/* Sync status */}
