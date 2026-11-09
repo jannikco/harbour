@@ -1,3 +1,5 @@
+**Using an AI assistant?** [Start with the plain-language guide](START-HERE.md).
+
 # Harbour
 
 A control plane for AI agents doing ongoing work.
